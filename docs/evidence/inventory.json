@@ -1,0 +1,1397 @@
+{
+ "counts": {
+  "agents": 49,
+  "skills": 110,
+  "skillsCcgs": 74,
+  "skillsNonCcgs": 2,
+  "skillsSymlinked": 34,
+  "skillsNoSkillMd": [
+   "unity-ecs-patterns"
+  ],
+  "rules": 14,
+  "hookEntries": 15,
+  "hookEvents": 8,
+  "templates": 71
+ },
+ "agentFrontmatterKeys": {
+  "file": 49,
+  "name": 49,
+  "description": 49,
+  "tools": 49,
+  "model": 49,
+  "maxTurns": 49,
+  "disallowedTools": 15,
+  "memory": 17,
+  "skills": 5,
+  "isolation": 1
+ },
+ "agentModels": {
+  "inherit": 30,
+  "sonnet": 16,
+  "opus": 3
+ },
+ "agentsWithAgentTool": [
+  "godot-specialist",
+  "unity-specialist",
+  "unreal-specialist"
+ ],
+ "skillFrontmatterKeys": {
+  "name": 109,
+  "description": 109,
+  "argument-hint": 74,
+  "user-invocable": 74,
+  "allowed-tools": 78,
+  "model": 74,
+  "required_packages": 4,
+  "required_editor_version": 1,
+  "metadata": 1,
+  "disable-model-invocation": 5,
+  "enabled": 1,
+  "modes": 2,
+  "version": 1
+ },
+ "skillsWithContextFork": [],
+ "skillsSpawningAgents": 11,
+ "nonCcgsSkills": [
+  "unity-code-reviewer",
+  "unity-ecs-patterns"
+ ],
+ "hooks": [
+  {
+   "event": "SessionStart",
+   "matcher": "",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh\"",
+   "timeout": 10
+  },
+  {
+   "event": "SessionStart",
+   "matcher": "",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/detect-gaps.sh\"",
+   "timeout": 10
+  },
+  {
+   "event": "PreToolUse",
+   "matcher": "Bash|PowerShell",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/validate-commit.sh\"",
+   "timeout": 15
+  },
+  {
+   "event": "PreToolUse",
+   "matcher": "Bash|PowerShell",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/validate-push.sh\"",
+   "timeout": 10
+  },
+  {
+   "event": "PreToolUse",
+   "matcher": "Write|Edit",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/validate-registry.sh\"",
+   "timeout": 15
+  },
+  {
+   "event": "PreToolUse",
+   "matcher": "Write|Edit",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/validate-write.sh\"",
+   "timeout": 15
+  },
+  {
+   "event": "PreToolUse",
+   "matcher": "Read",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/validate-read.sh\"",
+   "timeout": 10
+  },
+  {
+   "event": "PostToolUse",
+   "matcher": "Write|Edit",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/validate-assets.sh\"",
+   "timeout": 10
+  },
+  {
+   "event": "PostToolUse",
+   "matcher": "Write|Edit",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/validate-skill-change.sh\"",
+   "timeout": 5
+  },
+  {
+   "event": "Notification",
+   "matcher": "permission_prompt|idle_prompt",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/notify.sh\"",
+   "timeout": 10
+  },
+  {
+   "event": "PreCompact",
+   "matcher": "",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-compact.sh\"",
+   "timeout": 10
+  },
+  {
+   "event": "Stop",
+   "matcher": "",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-stop.sh\"",
+   "timeout": 10
+  },
+  {
+   "event": "SubagentStart",
+   "matcher": "",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/log-agent.sh\"",
+   "timeout": 5
+  },
+  {
+   "event": "SubagentStop",
+   "matcher": "",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/log-agent-stop.sh\"",
+   "timeout": 5
+  },
+  {
+   "event": "SubagentStop",
+   "matcher": "",
+   "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/validate-agent-artifact.sh\"",
+   "timeout": 10
+  }
+ ],
+ "rules": [
+  {
+   "file": "agent-memory.md",
+   "paths": [
+    ".claude/agent-memory/**"
+   ]
+  },
+  {
+   "file": "ai-code.md",
+   "paths": [
+    "src/ai/**",
+    "Assets/**/{AI,Ai,ai}/**/*.cs",
+    "Source/**/{AI,Ai,ai}/**/*.{h,cpp}"
+   ]
+  },
+  {
+   "file": "data-files.md",
+   "paths": [
+    "assets/data/**/*.json",
+    "Assets/**/{Data,data}/**/*.json",
+    "Content/**/{Data,data}/**/*.json"
+   ]
+  },
+  {
+   "file": "design-docs.md",
+   "paths": [
+    "design/gdd/**"
+   ]
+  },
+  {
+   "file": "engine-code.md",
+   "paths": [
+    "src/core/**",
+    "Assets/**/{Core,core}/**/*.cs",
+    "Source/**/{Core,core}/**/*.{h,cpp}"
+   ]
+  },
+  {
+   "file": "gameplay-code.md",
+   "paths": [
+    "src/gameplay/**",
+    "Assets/**/{Gameplay,gameplay}/**/*.cs",
+    "Source/**/{Gameplay,gameplay}/**/*.{h,cpp}"
+   ]
+  },
+  {
+   "file": "narrative.md",
+   "paths": [
+    "design/narrative/**"
+   ]
+  },
+  {
+   "file": "network-code.md",
+   "paths": [
+    "src/networking/**",
+    "Assets/**/{Networking,networking,Network,network}/**/*.cs",
+    "Source/**/{Networking,networking,Network,network}/**/*.{h,cpp}"
+   ]
+  },
+  {
+   "file": "prototype-code.md",
+   "paths": [
+    "prototypes/**"
+   ]
+  },
+  {
+   "file": "scene-files.md",
+   "paths": [
+    "**/*.tscn",
+    "**/*.tres",
+    "**/*.unity",
+    "**/*.prefab",
+    "Assets/**/*.asset"
+   ]
+  },
+  {
+   "file": "shader-code.md",
+   "paths": [
+    "assets/shaders/**",
+    "**/*.gdshader",
+    "Assets/**/*.{shader,hlsl,cginc,compute,shadergraph}",
+    "Shaders/**",
+    "**/*.{usf,ush}"
+   ]
+  },
+  {
+   "file": "skill-authoring.md",
+   "paths": [
+    ".claude/skills/**",
+    ".claude/agents/**"
+   ]
+  },
+  {
+   "file": "test-standards.md",
+   "paths": [
+    "tests/**",
+    "Assets/Tests/**/*.cs",
+    "Source/**/Tests/**/*.{h,cpp}"
+   ]
+  },
+  {
+   "file": "ui-code.md",
+   "paths": [
+    "src/ui/**",
+    "Assets/**/{UI,Ui,ui}/**/*.cs",
+    "Source/**/{UI,Ui,ui}/**/*.{h,cpp}"
+   ]
+  }
+ ],
+ "agents": [
+  {
+   "name": "accessibility-specialist",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "10"
+  },
+  {
+   "name": "ai-programmer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "analytics-engineer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash, WebSearch",
+   "maxTurns": "20"
+  },
+  {
+   "name": "art-director",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, WebSearch",
+   "maxTurns": "20"
+  },
+  {
+   "name": "audio-director",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, WebSearch",
+   "maxTurns": "20"
+  },
+  {
+   "name": "community-manager",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit",
+   "maxTurns": "10"
+  },
+  {
+   "name": "creative-director",
+   "model": "opus",
+   "tools": "Read, Glob, Grep, Write, Edit, WebSearch",
+   "maxTurns": "30"
+  },
+  {
+   "name": "devops-engineer",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "10"
+  },
+  {
+   "name": "economy-designer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit",
+   "maxTurns": "20"
+  },
+  {
+   "name": "engine-programmer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "game-designer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, WebSearch",
+   "maxTurns": "20"
+  },
+  {
+   "name": "gameplay-programmer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "godot-csharp-specialist",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "godot-gdextension-specialist",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "godot-gdscript-specialist",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "godot-shader-specialist",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "godot-specialist",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash, Agent",
+   "maxTurns": "20"
+  },
+  {
+   "name": "lead-programmer",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "level-designer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit",
+   "maxTurns": "20"
+  },
+  {
+   "name": "live-ops-designer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit",
+   "maxTurns": "20"
+  },
+  {
+   "name": "localization-lead",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "narrative-director",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, WebSearch",
+   "maxTurns": "20"
+  },
+  {
+   "name": "network-programmer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "performance-analyst",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "producer",
+   "model": "opus",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash, WebSearch",
+   "maxTurns": "30"
+  },
+  {
+   "name": "prototyper",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "25"
+  },
+  {
+   "name": "qa-lead",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "qa-tester",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "10"
+  },
+  {
+   "name": "release-manager",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "security-engineer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "sound-designer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit",
+   "maxTurns": "10"
+  },
+  {
+   "name": "systems-designer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit",
+   "maxTurns": "20"
+  },
+  {
+   "name": "technical-artist",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "technical-director",
+   "model": "opus",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash, WebSearch",
+   "maxTurns": "30"
+  },
+  {
+   "name": "tools-programmer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "ue-blueprint-specialist",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit",
+   "maxTurns": "20"
+  },
+  {
+   "name": "ue-gas-specialist",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "ue-replication-specialist",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "ue-umg-specialist",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "ui-programmer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "unity-addressables-specialist",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "unity-dots-specialist",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "unity-shader-specialist",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "unity-specialist",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash, Agent",
+   "maxTurns": "20"
+  },
+  {
+   "name": "unity-ui-specialist",
+   "model": "sonnet",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash",
+   "maxTurns": "20"
+  },
+  {
+   "name": "unreal-specialist",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, Bash, Agent",
+   "maxTurns": "20"
+  },
+  {
+   "name": "ux-designer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit, WebSearch",
+   "maxTurns": "20"
+  },
+  {
+   "name": "world-builder",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit",
+   "maxTurns": "20"
+  },
+  {
+   "name": "writer",
+   "model": "inherit",
+   "tools": "Read, Glob, Grep, Write, Edit",
+   "maxTurns": "20"
+  }
+ ],
+ "skills": [
+  {
+   "dir": "2d-pixel-perfect",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\2d-pixel-perfect",
+   "spawns": []
+  },
+  {
+   "dir": "adopt",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[focus: full | gdds | adrs | stories | infra]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "architecture-decision",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[title | retrofit <path> | accept <ADR-id>] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "architecture-review",
+   "origin": "ccgs",
+   "model": "opus",
+   "args": "[focus: full | coverage | consistency | engine | rtm | single-gdd path/to/gdd.md]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "art-bible",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "asset-audit",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[category|all]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "asset-spec",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[system:<name> | level:<name> | character:<name>] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "asset-transformer-toolkit",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\asset-transformer-toolkit",
+   "spawns": []
+  },
+  {
+   "dir": "audio-setup-mixers",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\audio-setup-mixers",
+   "spawns": []
+  },
+  {
+   "dir": "balance-check",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[system-name|path-to-data-file]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "brainstorm",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[genre or theme hint, or 'open'] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "bug-report",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[description] | analyze [path-to-file] | verify [BUG-ID] | close [BUG-ID]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "bug-triage",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[sprint | full | trend]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "build-gtk",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\build-gtk",
+   "spawns": []
+  },
+  {
+   "dir": "build-live-game",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\build-live-game",
+   "spawns": []
+  },
+  {
+   "dir": "changelog",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[version|sprint-number]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "code-review",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[path-to-file-or-directory]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "consistency-check",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[full | since-last-review | entity:<name> | item:<name>]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "content-audit",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[system-name | --summary | (no arg = full audit)]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "create-2d-physics",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\create-2d-physics",
+   "spawns": []
+  },
+  {
+   "dir": "create-architecture",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[focus-area: full | layers | data-flow | api-boundaries | adr-audit] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "create-control-manifest",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[update — regenerate from current ADRs] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "create-epics",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[system-name | layer: foundation|core|feature|presentation | all] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "create-stories",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[epic-slug | epic-path] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "create-tile-palette-or-rule-tiles",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\create-tile-palette-or-rule-tiles",
+   "spawns": []
+  },
+  {
+   "dir": "day-one-patch",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[scope: known-bugs | cert-feedback | all]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "design-review",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[path-to-design-doc] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "design-system",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "<system-name> [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "dev-story",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[story-path]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "estimate",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[task-description]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "gate-check",
+   "origin": "ccgs",
+   "model": "opus",
+   "args": "[target-phase: systems-design | technical-setup | pre-production | production | polish | release] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "generate-editor-search-query",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\generate-editor-search-query",
+   "spawns": []
+  },
+  {
+   "dir": "help",
+   "origin": "ccgs",
+   "model": "haiku",
+   "args": "[optional: what you just finished, e.g. 'finished design-review' or 'stuck on ADRs']",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "hotfix",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[bug-id or description]",
+   "userInvocable": "true",
+   "spawns": [
+    "lead-programmer",
+    "qa-tester",
+    "producer"
+   ]
+  },
+  {
+   "dir": "implement-in-app-purchases",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\implement-in-app-purchases",
+   "spawns": []
+  },
+  {
+   "dir": "initialize-ai-navigation",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\initialize-ai-navigation",
+   "spawns": []
+  },
+  {
+   "dir": "launch-checklist",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[launch-date or 'dry-run']",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "levelplay-unity-integration",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\levelplay-unity-integration",
+   "spawns": []
+  },
+  {
+   "dir": "localization",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\localization",
+   "spawns": []
+  },
+  {
+   "dir": "localize",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[scan|extract|validate|status|brief|cultural-review|vo-pipeline|rtl-check|freeze|qa]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "manage-sprite-atlas",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\manage-sprite-atlas",
+   "spawns": []
+  },
+  {
+   "dir": "map-systems",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[next | system-name] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "migrate-birp-to-urp",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\migrate-birp-to-urp",
+   "spawns": []
+  },
+  {
+   "dir": "milestone-review",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[milestone-name|current] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "new-unity-project",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\new-unity-project",
+   "spawns": []
+  },
+  {
+   "dir": "onboard",
+   "origin": "ccgs",
+   "model": "haiku",
+   "args": "[role|area]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "optimize-audio",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\optimize-audio",
+   "spawns": []
+  },
+  {
+   "dir": "optimize-text-mesh-pro",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\optimize-text-mesh-pro",
+   "spawns": []
+  },
+  {
+   "dir": "optimize-web",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\optimize-web",
+   "spawns": []
+  },
+  {
+   "dir": "patch-notes",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[version] [--style brief|detailed|full]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "perf-profile",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[system-name or 'full']",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "physics-3d-collision",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\physics-3d-collision",
+   "spawns": []
+  },
+  {
+   "dir": "playtest-report",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[new|analyze path-to-notes] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "project-auditor-fixes",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\project-auditor-fixes",
+   "spawns": []
+  },
+  {
+   "dir": "project-stage-detect",
+   "origin": "ccgs",
+   "model": "haiku",
+   "args": "[optional: role filter like 'programmer' or 'designer']",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "propagate-design-change",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[path/to/changed-gdd.md] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "prototype",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[concept-description] [--path html|engine|paper] [--review full|lean|solo] [--spike]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "qa-plan",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[sprint | feature: system-name | story: path]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "quick-design",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[brief description of the change]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "regression-suite",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[update | audit | report]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "release-checklist",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[platform: pc|console|mobile|all]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "retrospective",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[sprint-N|milestone-name]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "reverse-document",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "<type> <path> (e.g., 'design src/gameplay/combat' or 'architecture Assets/Scripts/Core')",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "review-all-gdds",
+   "origin": "ccgs",
+   "model": "opus",
+   "args": "[focus: full | consistency | design-theory | since-last-review]",
+   "userInvocable": "true",
+   "spawns": [
+    "game-designer"
+   ]
+  },
+  {
+   "dir": "scope-check",
+   "origin": "ccgs",
+   "model": "haiku",
+   "args": "[feature-name or sprint-N]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "security-audit",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[full | network | save | input | quick]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "settings",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[key | key=value | --local key=value]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "setup-engine",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[engine] | [engine version] | refresh | upgrade [old-version] [new-version] | no args for guided selection",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "setup-multiplayer-services",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\setup-multiplayer-services",
+   "spawns": []
+  },
+  {
+   "dir": "setup-vivox-voice-chat",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\setup-vivox-voice-chat",
+   "spawns": []
+  },
+  {
+   "dir": "shader-graph-create-custom-node",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\shader-graph-create-custom-node",
+   "spawns": []
+  },
+  {
+   "dir": "skill-improve",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[skill-name]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "skill-test",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "static [skill-name | all] | spec [skill-or-agent-name] | category [skill-or-agent-name | all] | audit",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "smoke-check",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[sprint | quick | --platform pc|console|mobile|all]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "soak-test",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[duration: 30m | 1h | 2h | 4h] [focus: memory | stability | balance | all]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "sprint-plan",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[new|update|status] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "sprint-status",
+   "origin": "ccgs",
+   "model": "haiku",
+   "args": "[sprint-number or blank for current]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "sprite-editor",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\sprite-editor",
+   "spawns": []
+  },
+  {
+   "dir": "sprite-segment-3x3grid",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\sprite-segment-3x3grid",
+   "spawns": []
+  },
+  {
+   "dir": "start",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[no arguments]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "story-done",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[story-file-path] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "story-readiness",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[story-file-path or 'all' or 'sprint'] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "team-audio",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[feature or area to design audio for] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": [
+    "audio-director",
+    "sound-designer",
+    "accessibility-specialist",
+    "technical-artist",
+    "gameplay-programmer"
+   ]
+  },
+  {
+   "dir": "team-combat",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[combat feature description] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": [
+    "game-designer",
+    "gameplay-programmer",
+    "ai-programmer",
+    "technical-artist",
+    "sound-designer",
+    "qa-tester"
+   ]
+  },
+  {
+   "dir": "team-level",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[level name or area to design] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": [
+    "narrative-director",
+    "world-builder",
+    "level-designer",
+    "systems-designer",
+    "art-director",
+    "accessibility-specialist",
+    "qa-tester"
+   ]
+  },
+  {
+   "dir": "team-live-ops",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[season name or event description] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": [
+    "live-ops-designer",
+    "economy-designer",
+    "analytics-engineer",
+    "community-manager",
+    "narrative-director",
+    "writer"
+   ]
+  },
+  {
+   "dir": "team-narrative",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[narrative content description] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": [
+    "narrative-director",
+    "writer",
+    "world-builder",
+    "art-director",
+    "level-designer",
+    "localization-lead"
+   ]
+  },
+  {
+   "dir": "team-polish",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[feature or area to polish] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": [
+    "performance-analyst",
+    "engine-programmer",
+    "technical-artist",
+    "sound-designer",
+    "tools-programmer",
+    "qa-tester"
+   ]
+  },
+  {
+   "dir": "team-qa",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[sprint | feature: system-name] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": [
+    "qa-lead",
+    "qa-tester"
+   ]
+  },
+  {
+   "dir": "team-release",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[version number or 'next'] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": [
+    "release-manager",
+    "qa-lead",
+    "devops-engineer",
+    "security-engineer",
+    "analytics-engineer",
+    "community-manager",
+    "producer",
+    "network-programmer",
+    "localization-lead",
+    "performance-analyst"
+   ]
+  },
+  {
+   "dir": "team-ui",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[UI feature description] [--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": [
+    "ux-designer",
+    "ui-programmer",
+    "art-director",
+    "accessibility-specialist"
+   ]
+  },
+  {
+   "dir": "tech-debt",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[scan|add|prioritize|report]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "test-evidence-review",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[story-path | sprint | system-name]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "test-flakiness",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[ci-log-path | scan | registry]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "test-helpers",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[system-name | all | scaffold]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "test-setup",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[force]",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "ui",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\ui",
+   "spawns": []
+  },
+  {
+   "dir": "ui-imgui",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\ui-imgui",
+   "spawns": []
+  },
+  {
+   "dir": "ui-ugui",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\ui-ugui",
+   "spawns": []
+  },
+  {
+   "dir": "ui-uitk",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\ui-uitk",
+   "spawns": []
+  },
+  {
+   "dir": "unity-cli",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\unity-cli",
+   "spawns": []
+  },
+  {
+   "dir": "unity-code-reviewer",
+   "origin": "non-ccgs",
+   "spawns": []
+  },
+  {
+   "dir": "unity-ecs-patterns",
+   "origin": "non-ccgs",
+   "spawns": []
+  },
+  {
+   "dir": "unity-package-management",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\unity-package-management",
+   "spawns": []
+  },
+  {
+   "dir": "unity-pipeline",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\unity-pipeline",
+   "spawns": []
+  },
+  {
+   "dir": "urp-postprocessing",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\urp-postprocessing",
+   "spawns": []
+  },
+  {
+   "dir": "ux-design",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[screen/flow name] or 'hud' or 'patterns' or 'accessibility'",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "ux-review",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[file-path or 'all' or 'hud' or 'patterns']",
+   "userInvocable": "true",
+   "spawns": []
+  },
+  {
+   "dir": "validate-urp-render-graph-renderer-feature",
+   "origin": "symlink:D:\\Meodoku\\.agents\\skills\\validate-urp-render-graph-renderer-feature",
+   "spawns": []
+  },
+  {
+   "dir": "vertical-slice",
+   "origin": "ccgs",
+   "model": "sonnet",
+   "args": "[--review full|lean|solo]",
+   "userInvocable": "true",
+   "spawns": []
+  }
+ ]
+}

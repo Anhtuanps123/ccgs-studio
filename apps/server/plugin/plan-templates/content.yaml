@@ -1,0 +1,8 @@
+id: content
+title: Thêm nội dung
+when: Thêm level, vật phẩm, chữ, asset theo hệ thống đã có.
+steps:
+  - skill: quick-design
+  - skill: asset-spec
+    optional: true
+  - skill: create-stories

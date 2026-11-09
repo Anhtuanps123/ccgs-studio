@@ -1,0 +1,27 @@
+# Mẫu kế hoạch: tính năng có UI. Studio đọc file này để chọn bước bắt buộc và thứ tự.
+# Trường của mỗi bước: skill, rigor (mặc định mọi mức), optional (chỉ thêm khi cần/được đồng ý),
+# repeat (lặp được, ví dụ mỗi màn một lần), output (có file này rồi thì bỏ bước; {slug} = mã tính năng).
+id: feature-ui
+title: Tính năng có UI
+when: Tính năng mới có màn hình, popup, HUD hoặc nút mới.
+ui: true
+steps:
+  - skill: quick-design
+    rigor: [minimal]
+  - skill: design-system
+    rigor: [standard, full]
+  - skill: design-review
+    rigor: [full]
+  - skill: studio:unity-art-context
+    output: design/art-context/{slug}.md
+  - skill: ux-design
+    repeat: true
+  - skill: ux-review
+    rigor: [full]
+    repeat: true
+  - skill: prototype
+    optional: true
+    repeat: true
+  - skill: create-epics
+    rigor: [standard, full]
+  - skill: create-stories

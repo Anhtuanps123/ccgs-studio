@@ -1,0 +1,16 @@
+id: feature-logic
+title: Tính năng không có UI mới
+when: Hệ thống hoặc luật chơi mới, không thêm màn, popup hay nút.
+steps:
+  - skill: quick-design
+    rigor: [minimal]
+  - skill: design-system
+    rigor: [standard, full]
+  - skill: design-review
+    rigor: [full]
+  - skill: architecture-decision
+    optional: true
+    repeat: true
+  - skill: create-epics
+    rigor: [standard, full]
+  - skill: create-stories

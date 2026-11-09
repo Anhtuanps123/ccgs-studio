@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CCGS Studio – bản mẫu giao diện</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#EEF1F5; --surface:#FFFFFF; --surface-2:#F6F8FA; --line:#D9DEE6; --line-strong:#C3CAD5;
+  --text:#1F2430; --muted:#5D6575; --accent:#3B4CCA; --accent-soft:#E3E6FA; --on-accent:#FFFFFF;
+  --run:#0F8B8D; --wait:#B7790E; --fail:#C2412D; --done:#4A6FA5; --unk:#8A919E; --cancel:#6B7280;
+  --code-bg:#F1F3F7; --shadow:0 8px 28px rgba(31,36,48,.14);
+  color-scheme:light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#14171D; --surface:#1C2028; --surface-2:#232833; --line:#2E3440; --line-strong:#3C4452;
+    --text:#E6E9EF; --muted:#9AA3B2; --accent:#8C98F5; --accent-soft:#2A2F52; --on-accent:#14171D;
+    --run:#3FC1C3; --wait:#E0A93B; --fail:#EF7A66; --done:#86A6D9; --unk:#7D8594; --cancel:#8B93A1;
+    --code-bg:#232833; --shadow:0 8px 28px rgba(0,0,0,.5);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#14171D; --surface:#1C2028; --surface-2:#232833; --line:#2E3440; --line-strong:#3C4452;
+  --text:#E6E9EF; --muted:#9AA3B2; --accent:#8C98F5; --accent-soft:#2A2F52; --on-accent:#14171D;
+  --run:#3FC1C3; --wait:#E0A93B; --fail:#EF7A66; --done:#86A6D9; --unk:#7D8594; --cancel:#8B93A1;
+  --code-bg:#232833; --shadow:0 8px 28px rgba(0,0,0,.5);
+  color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:14px/1.5 "Instrument Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
+code,.mono{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+img{max-width:100%}
+
+.app{display:grid;grid-template-columns:236px 1fr;height:100%}
+.side{background:var(--surface);border-right:1px solid var(--line);overflow-y:auto;padding:18px 12px;display:flex;flex-direction:column;gap:18px}
+.brand{display:flex;align-items:center;gap:10px;padding:0 8px}
+.brand-mark{width:30px;height:30px;border-radius:8px;background:var(--accent);display:grid;place-items:center;color:var(--on-accent);font-weight:700;font-size:13px;letter-spacing:-.02em}
+.brand b{font-size:15px;letter-spacing:-.01em}
+.brand small{display:block;color:var(--muted);font-size:12px;line-height:1.2}
+.nav-group h2{font-size:12px;font-weight:600;color:var(--muted);margin:0 8px 6px}
+.nav-group a{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;border-radius:7px;color:var(--text);text-decoration:none;font-weight:500}
+.nav-group a:hover{background:var(--surface-2)}
+.nav-group a[aria-current="page"]{background:var(--accent-soft);color:var(--accent)}
+.nav-group a .count{font-size:12px;color:var(--muted);font-weight:500}
+.side-foot{margin-top:auto;padding:0 8px;color:var(--muted);font-size:12px}
+
+.main{overflow-y:auto;min-width:0}
+.topbar{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:10px 24px;flex-wrap:wrap}
+.topbar .proj{font-weight:600}
+.topbar .proj span{color:var(--muted);font-weight:400}
+.topbar .grow{flex:1}
+.mockflag{font-size:12px;color:var(--wait);border:1px solid currentColor;border-radius:999px;padding:2px 10px}
+.iconbtn{border:1px solid var(--line);background:var(--surface);border-radius:7px;padding:5px 10px;cursor:pointer}
+.iconbtn:hover{background:var(--surface-2)}
+
+.view{padding:24px;max-width:1240px}
+.view-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap}
+.view-head h1{font-size:24px;line-height:1.2;margin:0;letter-spacing:-.015em}
+.view-head p{margin:4px 0 0;color:var(--muted);max-width:68ch}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px}
+.panel-h{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.panel-h h3{margin:0;font-size:14px}
+.panel-b{padding:14px 16px}
+.grid2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px}
+.grid-eq{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.stack{display:flex;flex-direction:column;gap:16px}
+.muted{color:var(--muted)}
+.small{font-size:12.5px}
+
+.status{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;white-space:nowrap}
+.status::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+.status[data-s="running"]{color:var(--run)}
+.status[data-s="running"]::before{animation:pulse 1.6s ease-in-out infinite}
+.status[data-s="waiting"]{color:var(--wait)}
+.status[data-s="completed"]{color:var(--done)}
+.status[data-s="failed"]{color:var(--fail)}
+.status[data-s="unknown"]{color:var(--unk)}
+.status[data-s="unknown"]::before{background:transparent;border:1.5px dashed currentColor}
+.status[data-s="cancelled"],.status[data-s="queued"]{color:var(--cancel)}
+.status[data-s="queued"]::before{background:transparent;border:1.5px solid currentColor}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.status[data-s="running"]::before{animation:none}}
+
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);background:var(--surface);border-radius:7px;padding:6px 12px;font-weight:600;cursor:pointer}
+.btn:hover{background:var(--surface-2)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.danger{color:var(--fail);border-color:color-mix(in srgb,var(--fail) 45%,var(--line))}
+.btn.sm{padding:3px 9px;font-size:12.5px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:600;color:var(--muted);text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+tbody tr.click{cursor:pointer}
+tbody tr.click:hover{background:var(--surface-2)}
+tbody tr.sel{background:var(--accent-soft)}
+
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+.field label{font-size:12.5px;font-weight:600}
+.field .hint{font-size:12px;color:var(--muted)}
+input[type=text],input[type=search],input[type=number],select,textarea{background:var(--surface);border:1px solid var(--line-strong);border-radius:7px;padding:7px 10px;width:100%}
+textarea{min-height:84px;resize:vertical}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--line-strong);background:var(--surface);border-radius:999px;padding:3px 11px;font-size:12.5px;cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--text);color:var(--surface);border-color:var(--text)}
+.tag{display:inline-block;font-size:11.5px;border:1px solid var(--line-strong);border-radius:5px;padding:0 6px;color:var(--muted);white-space:nowrap}
+.tag.ext{color:var(--wait);border-color:currentColor}
+
+/* Dashboard */
+.now{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 16px;align-items:start}
+.now h2{margin:0;font-size:20px;letter-spacing:-.01em}
+.agent-strip{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.agent-chip{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--surface-2)}
+.checks{list-style:none;margin:0;padding:0}
+.checks li{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+.checks li:last-child{border-bottom:0}
+.mark{width:18px;height:18px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:11px;font-weight:700;color:var(--surface);margin-top:1px}
+.mark.ok{background:var(--run)}
+.mark.warn{background:var(--wait)}
+.mark.bad{background:var(--fail)}
+.mark.pend{background:var(--unk)}
+.counts{display:flex;flex-wrap:wrap;gap:0;border-top:1px solid var(--line)}
+.counts a{flex:1 1 110px;padding:12px 16px;text-decoration:none;color:var(--text);border-right:1px solid var(--line)}
+.counts a:last-child{border-right:0}
+.counts a:hover{background:var(--surface-2)}
+.counts b{display:block;font-size:22px;line-height:1.1}
+.counts span{font-size:12.5px;color:var(--muted)}
+
+/* Agents */
+.split{display:grid;grid-template-columns:320px minmax(0,1fr);gap:16px;align-items:start}
+.list-scroll{max-height:640px;overflow-y:auto}
+.tier h4{margin:0;padding:10px 16px 4px;font-size:12px;color:var(--muted);font-weight:600}
+.item{display:block;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);padding:9px 16px;cursor:pointer}
+.item:hover{background:var(--surface-2)}
+.item[aria-selected="true"]{background:var(--accent-soft)}
+.item b{display:block;font-size:13.5px}
+.item span{display:block;font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+dl.meta{display:grid;grid-template-columns:140px 1fr;gap:6px 14px;margin:0}
+dl.meta dt{color:var(--muted);font-size:12.5px}
+dl.meta dd{margin:0}
+pre.md{background:var(--code-bg);border-radius:8px;padding:14px;overflow-x:auto;white-space:pre-wrap;margin:0;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:12.5px;line-height:1.6}
+.statrow{display:flex;gap:28px;flex-wrap:wrap}
+.statrow div b{display:block;font-size:18px}
+.statrow div span{font-size:12.5px;color:var(--muted)}
+
+/* Tabs */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px;overflow-x:auto}
+.tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:8px 12px;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap}
+.tabs button[aria-selected="true"]{color:var(--text);border-bottom-color:var(--accent)}
+
+/* Task center */
+.question{border:1.5px solid var(--wait);border-radius:10px;background:color-mix(in srgb,var(--wait) 9%,var(--surface));padding:14px 16px}
+.question h3{margin:0 0 4px;font-size:15px}
+.opt-list{display:flex;flex-direction:column;gap:8px;margin:12px 0}
+.opt{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line-strong);border-radius:8px;padding:9px 12px;background:var(--surface);cursor:pointer}
+.opt input{margin-top:3px}
+.queue{list-style:none;margin:0;padding:0}
+.queue li{display:flex;align-items:center;gap:10px;padding:10px 16px;border-top:1px solid var(--line)}
+.queue li:first-child{border-top:0}
+.queue .pos{width:22px;color:var(--muted);font-weight:600}
+.queue .t{flex:1;min-width:0}
+.queue .t b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Live */
+.conv{display:flex;flex-direction:column;gap:12px}
+.msg{max-width:78ch}
+.msg .who{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:3px}
+.msg.user .bubble{background:var(--accent-soft);border-radius:10px;padding:10px 14px}
+.msg.ai .bubble{padding:2px 0}
+details.tool{border:1px solid var(--line);border-radius:8px;background:var(--surface-2)}
+details.tool summary{cursor:pointer;padding:7px 12px;display:flex;gap:10px;align-items:center;list-style:none}
+details.tool summary::-webkit-details-marker{display:none}
+details.tool summary::before{content:"▸";color:var(--muted);font-size:11px}
+details.tool[open] summary::before{content:"▾"}
+details.tool .body{padding:0 12px 10px}
+.sub-call{border-left:3px solid var(--accent);padding-left:12px}
+
+/* Timeline — the centrepiece */
+.tl{position:relative;--label:190px}
+.tl-ruler,.tl-lane{display:grid;grid-template-columns:var(--label) 1fr}
+.tl-ruler .track{position:relative;height:28px;border-bottom:1px solid var(--line-strong)}
+.tl-ruler .tick{position:absolute;bottom:0;transform:translateX(-50%);font-size:11.5px;color:var(--muted);padding-bottom:4px}
+.tl-lane{border-bottom:1px solid var(--line);min-height:54px}
+.tl-lane .lab{padding:10px 12px 10px 0;display:flex;flex-direction:column;justify-content:center}
+.tl-lane .lab b{font-size:13px}
+.tl-lane .lab span{font-size:12px;color:var(--muted)}
+.tl-lane .track{position:relative;background:repeating-linear-gradient(90deg,transparent 0,transparent calc(100%/9 - 1px),var(--line) calc(100%/9 - 1px),var(--line) calc(100%/9))}
+.bar{position:absolute;top:12px;height:30px;border-radius:6px;border:1.5px solid var(--c);background:color-mix(in srgb,var(--c) 18%,var(--surface));color:var(--text);font-size:12px;font-weight:600;padding:0 8px;display:flex;align-items:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer;text-align:left}
+.bar:hover{background:color-mix(in srgb,var(--c) 30%,var(--surface))}
+.bar[aria-pressed="true"]{box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--c)}
+.bar[data-s="running"]{--c:var(--run);border-right-style:dashed}
+.bar[data-s="waiting"]{--c:var(--wait);background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--wait) 22%,var(--surface)) 0 6px,var(--surface) 6px 12px)}
+.bar[data-s="completed"]{--c:var(--done)}
+.bar[data-s="failed"]{--c:var(--fail)}
+.bar[data-s="unknown"]{--c:var(--unk);border-style:dashed;background:var(--surface)}
+.nowline{position:absolute;top:0;bottom:0;width:0;border-left:2px solid var(--accent);pointer-events:none}
+.nowline span{position:absolute;top:-2px;left:4px;font-size:11px;font-weight:700;color:var(--accent);background:var(--surface);padding:0 3px;border-radius:3px}
+.legend{display:flex;gap:16px;flex-wrap:wrap}
+.detail-grid{display:grid;grid-template-columns:120px 1fr;gap:8px 14px}
+.detail-grid dt{color:var(--muted);font-size:12.5px}
+.detail-grid dd{margin:0}
+.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+.steps li{display:grid;grid-template-columns:28px 76px minmax(0,1fr) auto;gap:10px;padding:9px 16px;border-top:1px solid var(--line);align-items:center;cursor:pointer}
+.steps li:hover{background:var(--surface-2)}
+.steps li::before{counter-increment:s;content:counter(s);color:var(--muted);font-weight:600}
+
+/* Bars chart */
+.hbar{display:grid;grid-template-columns:150px 1fr 64px;gap:10px;align-items:center;padding:5px 0}
+.hbar .track{height:14px;background:var(--surface-2);border-radius:4px;overflow:hidden;display:flex}
+.hbar .fill{height:100%;background:var(--accent)}
+.hbar .fill.alt{background:color-mix(in srgb,var(--accent) 45%,var(--surface))}
+.vbars{display:flex;align-items:flex-end;gap:14px;height:170px;padding-top:10px}
+.vbars .col{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%;justify-content:flex-end}
+.vbars .stackbar{width:100%;max-width:42px;display:flex;flex-direction:column-reverse;border-radius:4px;overflow:hidden}
+.vbars .ok{background:var(--done)}
+.vbars .bad{background:var(--fail)}
+.vbars small{font-size:11.5px;color:var(--muted)}
+.big{display:flex;gap:0;flex-wrap:wrap}
+.big div{flex:1 1 160px;padding:14px 16px;border-right:1px solid var(--line)}
+.big div:last-child{border-right:0}
+.big b{display:block;font-size:26px;line-height:1.1;letter-spacing:-.02em}
+.big span{font-size:12.5px;color:var(--muted)}
+
+/* Diff */
+.diff{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:12px;background:var(--code-bg);border-radius:8px;padding:10px 0;overflow-x:auto}
+.diff div{padding:0 12px;white-space:pre}
+.diff .add{background:color-mix(in srgb,var(--run) 16%,transparent)}
+.diff .del{background:color-mix(in srgb,var(--fail) 16%,transparent)}
+.redacted{background:var(--text);color:var(--surface);border-radius:3px;padding:0 4px;font-size:11px}
+
+/* Dialog + toast */
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--text);padding:0;max-width:min(560px,92vw);box-shadow:var(--shadow)}
+dialog::backdrop{background:rgba(15,18,25,.45)}
+dialog .d-h{padding:16px 18px 6px}
+dialog .d-h h3{margin:0;font-size:16px}
+dialog .d-b{padding:6px 18px 12px}
+dialog .d-f{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%) translateY(20px);background:var(--text);color:var(--surface);padding:9px 16px;border-radius:8px;font-weight:600;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;z-index:50}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+.empty{padding:28px 16px;text-align:center;color:var(--muted)}
+
+@media (max-width:1000px){
+  .grid2,.grid-eq,.split{grid-template-columns:1fr}
+  .list-scroll{max-height:320px}
+}
+@media (max-width:760px){
+  .app{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+  .side{flex-direction:row;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--line);padding:10px;gap:12px;align-items:flex-start}
+  .brand small,.side-foot,.nav-group h2{display:none}
+  .nav-group{display:flex;gap:2px}
+  .nav-group a{white-space:nowrap}
+  .nav-group a .count{display:none}
+  .view{padding:16px}
+  .topbar{padding:10px 16px}
+  .tl{--label:118px}
+  .steps li{grid-template-columns:24px 60px minmax(0,1fr)}
+  .steps li .status{grid-column:3}
+  .hbar{grid-template-columns:100px 1fr 54px}
+  dl.meta{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side" aria-label="Điều hướng">
+    <div class="brand"><div class="brand-mark" aria-hidden="true">CS</div><div><b>CCGS Studio</b><small>Bảng điều khiển local</small></div></div>
+    <nav class="nav-group" aria-label="Tools">
+      <h2>Tools</h2>
+      <a href="#dashboard" data-v="dashboard">Tổng quan</a>
+      <a href="#agents" data-v="agents">Agents <span class="count" id="c-agents"></span></a>
+      <a href="#skills" data-v="skills">Skills <span class="count" id="c-skills"></span></a>
+      <a href="#config" data-v="config">Rules, Hooks, khác</a>
+      <a href="#projects" data-v="projects">Project</a>
+      <a href="#tasks" data-v="tasks">Task Center <span class="count" id="c-queue"></span></a>
+    </nav>
+    <nav class="nav-group" aria-label="Monitor">
+      <h2>Monitor</h2>
+      <a href="#live" data-v="live">Session trực tiếp</a>
+      <a href="#agent-monitor" data-v="agent-monitor">Agent Monitor</a>
+      <a href="#timeline" data-v="timeline">Timeline</a>
+      <a href="#tool-activity" data-v="tool-activity">Tool và file</a>
+      <a href="#logs" data-v="logs">Logs <span class="count" id="c-errors"></span></a>
+      <a href="#performance" data-v="performance">Hiệu suất</a>
+    </nav>
+    <nav class="nav-group" aria-label="Hệ thống">
+      <h2>Hệ thống</h2>
+      <a href="#preferences" data-v="preferences">Cài đặt</a>
+    </nav>
+    <div class="side-foot">Claude Code 2.x (mẫu)<br>Backend 127.0.0.1:4310</div>
+  </aside>
+
+  <div class="main" id="main">
+    <header class="topbar">
+      <div class="proj">ember-quest <span>~/games/ember-quest</span></div>
+      <a href="#tasks" class="status" id="top-status" data-s="waiting" style="text-decoration:none">Đang chờ bạn trả lời</a>
+      <span class="muted small" id="top-queue"></span>
+      <span class="grow"></span>
+      <span class="mockflag">Bản mẫu: dữ liệu giả, chưa nối CCGS</span>
+      <button class="iconbtn" id="theme-btn" type="button" aria-label="Đổi giao diện sáng tối">Sáng / tối</button>
+    </header>
+    <section class="view" id="view" aria-live="polite"></section>
+  </div>
+</div>
+
+<dialog id="dlg"><form method="dialog"><div class="d-h"><h3 id="dlg-title"></h3></div><div class="d-b" id="dlg-body"></div><div class="d-f"><button class="btn" value="cancel">Huỷ</button><button class="btn primary" value="ok" id="dlg-ok">Xác nhận</button></div></form></dialog>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+/* ---------- Mock data (bản mẫu, chưa nối CCGS) ---------- */
+const AGENTS = [
+  {id:'creative-director',name:'Creative Director',tier:'Director',model:'opus',tools:['Read','Glob','Grep','Task'],desc:'Giữ tầm nhìn sáng tạo và ra quyết định cuối về hướng đi của game.',runs:14,ok:93,avg:'4m 12s'},
+  {id:'technical-director',name:'Technical Director',tier:'Director',model:'opus',tools:['Read','Glob','Grep','Task','Bash'],desc:'Quyết định kiến trúc, engine và chuẩn kỹ thuật.',runs:11,ok:91,avg:'5m 40s'},
+  {id:'producer',name:'Producer',tier:'Director',model:'opus',tools:['Read','Write','Task'],desc:'Lập kế hoạch sprint, theo dõi phạm vi và rủi ro.',runs:9,ok:100,avg:'2m 05s'},
+  {id:'game-designer',name:'Game Designer',tier:'Lead',model:'sonnet',tools:['Read','Write','Edit','Glob'],desc:'Thiết kế vòng lặp gameplay, cơ chế và tiến trình người chơi.',runs:22,ok:95,avg:'2m 48s'},
+  {id:'lead-programmer',name:'Lead Programmer',tier:'Lead',model:'sonnet',tools:['Read','Write','Edit','Bash','Grep'],desc:'Review code, phân việc lập trình, giữ chất lượng codebase.',runs:17,ok:88,avg:'3m 30s'},
+  {id:'qa-lead',name:'QA Lead',tier:'Lead',model:'sonnet',tools:['Read','Bash','Grep'],desc:'Lên kế hoạch kiểm thử và quyết định tiêu chí phát hành.',runs:8,ok:100,avg:'1m 52s'},
+  {id:'systems-designer',name:'Systems Designer',tier:'Specialist',model:'sonnet',tools:['Read','Write','Edit'],desc:'Công thức, cân bằng số liệu, hệ thống kinh tế trong game.',runs:13,ok:92,avg:'3m 10s'},
+  {id:'gameplay-programmer',name:'Gameplay Programmer',tier:'Specialist',model:'sonnet',tools:['Read','Write','Edit','Bash','Grep','Glob'],desc:'Viết code gameplay theo thiết kế đã duyệt.',runs:25,ok:80,avg:'6m 02s'},
+  {id:'level-designer',name:'Level Designer',tier:'Specialist',model:'sonnet',tools:['Read','Write','Edit'],desc:'Bố cục màn chơi, nhịp độ và điểm đặt thử thách.',runs:6,ok:100,avg:'2m 20s'},
+  {id:'qa-tester',name:'QA Tester',tier:'Specialist',model:'haiku',tools:['Read','Bash'],desc:'Chạy test, viết báo cáo lỗi có bước tái hiện.',runs:19,ok:89,avg:'1m 15s'}
+];
+const SKILLS = [
+  {name:'/start',desc:'Bắt đầu phiên làm việc, hỏi bạn đang ở giai đoạn nào của dự án.',args:'',agents:['producer'],runs:4},
+  {name:'/brainstorm',desc:'Lên ý tưởng game hoặc tính năng mới cùng bạn.',args:'[chủ đề]',agents:['creative-director','game-designer'],runs:6},
+  {name:'/design-review',desc:'Review một tài liệu thiết kế theo nhiều góc nhìn.',args:'<đường dẫn file>',agents:['game-designer','systems-designer','gameplay-programmer'],runs:9},
+  {name:'/sprint-plan',desc:'Lập kế hoạch sprint từ backlog hiện có.',args:'[số tuần]',agents:['producer'],runs:5},
+  {name:'/code-review',desc:'Review thay đổi code theo chuẩn của project.',args:'[branch hoặc file]',agents:['lead-programmer'],runs:12},
+  {name:'/prototype',desc:'Dựng nhanh một prototype để thử cơ chế.',args:'<cơ chế>',agents:['gameplay-programmer'],runs:3},
+  {name:'/bug-report',desc:'Viết báo cáo lỗi chuẩn với bước tái hiện.',args:'<mô tả lỗi>',agents:['qa-tester'],runs:7},
+  {name:'/playtest-report',desc:'Tổng hợp ghi chú playtest thành báo cáo.',args:'<file ghi chú>',agents:['qa-lead','game-designer'],runs:2}
+];
+const RULES = [
+  {name:'gameplay-code.md',scope:'src/gameplay/**',desc:'Không dùng magic number; mọi giá trị cân bằng nằm trong file data.'},
+  {name:'design-docs.md',scope:'design/**',desc:'Tài liệu thiết kế phải có mục Mục tiêu, Cơ chế, Câu hỏi mở.'},
+  {name:'tests.md',scope:'tests/**',desc:'Mỗi bug fix kèm một test tái hiện.'},
+  {name:'assets.md',scope:'assets/**',desc:'Quy ước đặt tên asset: loai_ten_bienthe.'}
+];
+const HOOKS_CCGS = [
+  {event:'SessionStart',matcher:'*',cmd:'.claude/hooks/session-start.sh',desc:'Nạp ngữ cảnh sprint hiện tại'},
+  {event:'PreToolUse',matcher:'Bash',cmd:'.claude/hooks/validate-commit.sh',desc:'Kiểm tra lệnh git commit'},
+  {event:'PostToolUse',matcher:'Write|Edit',cmd:'.claude/hooks/check-assets.sh',desc:'Kiểm tra quy ước tên asset'}
+];
+const STUDIO_EVENTS = ['SessionStart','SessionEnd','UserPromptSubmit','PreToolUse','PostToolUse','SubagentStop','Stop','Notification','PreCompact'];
+const WORKFLOWS = [
+  {name:'Ý tưởng tới prototype',steps:['/brainstorm','/design-review','/prototype'],desc:'Từ ý tưởng thô đến bản chơi thử đầu tiên.'},
+  {name:'Vòng sprint',steps:['/sprint-plan','/code-review','/playtest-report'],desc:'Một vòng lặp phát triển hai tuần.'}
+];
+const TEMPLATES = ['game-design-document.md','sprint-plan.md','bug-report.md','postmortem.md','level-brief.md'];
+
+const LOAD = Date.now();
+const SESSION_NOW0 = 470; // giây kể từ khi session bắt đầu, lúc mở trang
+const sNow = () => SESSION_NOW0 + (Date.now()-LOAD)/1000;
+
+const STEPS = [
+  {id:'s1',lane:'main',label:'Nhận prompt /design-review',start:0,end:12,status:'completed',input:'/design-review design/gdd/combat-system.md',output:'Nạp skill design-review, lên kế hoạch gọi 3 subagent.'},
+  {id:'s2',lane:'main',label:'Đọc tài liệu GDD',start:12,end:40,status:'completed',input:'Read design/gdd/combat-system.md',output:'312 dòng, 6 mục.'},
+  {id:'s3',lane:'game-designer',label:'Đánh giá vòng lặp gameplay',start:44,end:210,status:'completed',input:'Đánh giá vòng lặp chiến đấu: mục tiêu, phần thưởng, nhịp độ.',output:'4 nhận xét, 1 vấn đề lớn về nhịp độ combo.'},
+  {id:'s4',lane:'systems-designer',label:'Kiểm tra công thức sát thương',start:48,end:260,status:'completed',input:'Kiểm tra công thức sát thương và đường cong cân bằng.',output:'Công thức chí mạng vượt trần ở level 30.'},
+  {id:'s5',lane:'main',label:'Tổng hợp nhận xét',start:262,end:300,status:'completed',input:'Kết quả từ 2 subagent',output:'Bản nháp review 6 mục.'},
+  {id:'s9',lane:'qa-tester',label:'Không đủ event',start:300,end:340,status:'unknown',input:'Không có',output:'Có PostToolUse nhưng thiếu event bắt đầu và kết thúc; không xác định được trạng thái.'},
+  {id:'s6',lane:'gameplay-programmer',label:'Đánh giá khả thi kỹ thuật',start:305,end:430,status:'failed',input:'Ước lượng chi phí cài đặt hệ thống combo trong engine.',output:'Lỗi: lệnh Bash hết thời gian sau 120 giây.'},
+  {id:'s7',lane:'gameplay-programmer',label:'Thử lại đánh giá',start:432,end:null,status:'running',input:'Thử lại, bỏ qua bước build.',output:'Đang chạy.'},
+  {id:'s8',lane:'main',label:'Hỏi bạn: turn-based hay real-time?',start:440,end:null,status:'waiting',input:'AskUserQuestion',output:'Đang chờ câu trả lời trong Task Center.'}
+];
+const LANES = [
+  {id:'main',name:'Main session',sub:'phiên chính'},
+  {id:'game-designer',name:'Game Designer',sub:'subagent'},
+  {id:'systems-designer',name:'Systems Designer',sub:'subagent'},
+  {id:'gameplay-programmer',name:'Gameplay Programmer',sub:'subagent'},
+  {id:'qa-tester',name:'QA Tester',sub:'subagent'}
+];
+const TOOLCALLS = [
+  {t:'14:02:13',agent:'main',tool:'Skill',input:'design-review',status:'completed',dur:'0.1s'},
+  {t:'14:02:22',agent:'main',tool:'Read',input:'design/gdd/combat-system.md',status:'completed',dur:'0.2s'},
+  {t:'14:02:54',agent:'main',tool:'Task',input:'game-designer: Đánh giá vòng lặp chiến đấu…',status:'completed',dur:'2m 46s'},
+  {t:'14:02:58',agent:'main',tool:'Task',input:'systems-designer: Kiểm tra công thức sát thương…',status:'completed',dur:'3m 32s'},
+  {t:'14:03:20',agent:'game-designer',tool:'Grep',input:'"combo" in design/',status:'completed',dur:'0.3s'},
+  {t:'14:04:02',agent:'systems-designer',tool:'Read',input:'data/balance/damage.json',status:'completed',dur:'0.1s'},
+  {t:'14:06:40',agent:'systems-designer',tool:'Edit',input:'design/gdd/combat-system.md',status:'completed',dur:'0.2s'},
+  {t:'14:07:15',agent:'main',tool:'Task',input:'gameplay-programmer: Ước lượng chi phí…',status:'failed',dur:'2m 05s'},
+  {t:'14:07:40',agent:'gameplay-programmer',tool:'Bash',input:'godot --headless --export-debug Linux',status:'failed',dur:'120s'},
+  {t:'14:08:13',agent:'qa-tester',tool:'Bash',input:'npm test -- combat',status:'unknown',dur:'?'},
+  {t:'14:09:22',agent:'main',tool:'Task',input:'gameplay-programmer: Thử lại, bỏ qua build',status:'running',dur:''},
+  {t:'14:09:30',agent:'main',tool:'AskUserQuestion',input:'Turn-based hay real-time?',status:'waiting',dur:''},
+  {t:'14:09:41',agent:'gameplay-programmer',tool:'mcp__godot__get_scene',input:'res://scenes/combat.tscn',status:'completed',dur:'0.8s'}
+];
+const FILES = [
+  {op:'Đọc',path:'design/gdd/combat-system.md',agent:'main'},
+  {op:'Đọc',path:'data/balance/damage.json',agent:'systems-designer'},
+  {op:'Sửa',path:'design/gdd/combat-system.md',agent:'systems-designer',diff:[['ctx','## Công thức chí mạng'],['del','crit = base * (1 + level * 0.05)'],['add','crit = base * min(1 + level * 0.05, 2.2)'],['add','# Trần 2.2 để tránh vượt ngưỡng ở level 30']]},
+  {op:'Tạo',path:'production/reviews/combat-review-draft.md',agent:'main',diff:[['add','# Review: Combat system'],['add',''],['add','## Nhịp độ combo'],['add','Combo 5 đòn kéo dài 3.2 giây, chậm hơn mục tiêu.']]}
+];
+let LOGS = [
+  {t:'14:02:10',lvl:'info',src:'Studio',msg:'Session a91f3c bắt đầu (task T-042).'},
+  {t:'14:02:10',lvl:'info',src:'Hook',msg:'SessionStart nhận được, độ trễ 4 ms.'},
+  {t:'14:02:13',lvl:'info',src:'Claude Code',msg:'Skill design-review được kích hoạt.'},
+  {t:'14:03:01',lvl:'warn',src:'Hook',msg:'Payload PostToolUse lớn 412 KB, đã cắt còn 64 KB.'},
+  {t:'14:04:02',lvl:'info',src:'Studio',msg:'Che 1 giá trị bí mật trong input của Bash: API_KEY=[đã che].',redact:true},
+  {t:'14:06:40',lvl:'info',src:'Claude Code',msg:'systems-designer sửa design/gdd/combat-system.md.'},
+  {t:'14:07:40',lvl:'error',src:'Claude Code',msg:'Bash hết thời gian sau 120 giây: godot --headless --export-debug Linux.'},
+  {t:'14:07:41',lvl:'error',src:'Studio',msg:'Subagent gameplay-programmer kết thúc với lỗi.'},
+  {t:'14:08:13',lvl:'warn',src:'Studio',msg:'Không gắn được tool call của qa-tester với lần gọi agent nào; trạng thái đặt là Unknown.'},
+  {t:'14:09:22',lvl:'info',src:'Claude Code',msg:'Gọi lại gameplay-programmer.'},
+  {t:'14:09:30',lvl:'info',src:'Hook',msg:'Notification: Claude đang chờ người dùng trả lời.'},
+  {t:'14:09:31',lvl:'warn',src:'Studio',msg:'Task T-042 chuyển sang Waiting.'}
+];
+let TASKS = [
+  {id:'T-042',title:'/design-review design/gdd/combat-system.md',status:'waiting',kind:'skill',when:'14:02',dur:'7m 51s'},
+  {id:'T-043',title:'/code-review feature/combo-system',status:'queued',kind:'skill',when:'',dur:''},
+  {id:'T-044',title:'Viết test cho hệ thống inventory',status:'queued',kind:'prompt',when:'',dur:''},
+  {id:'T-041',title:'/sprint-plan 2',status:'completed',kind:'skill',when:'11:40',dur:'3m 12s'},
+  {id:'T-040',title:'/prototype dash-attack',status:'failed',kind:'skill',when:'10:05',dur:'9m 47s'},
+  {id:'T-039',title:'Sửa lỗi nhân vật kẹt tường ở level 2',status:'completed',kind:'prompt',when:'Hôm qua',dur:'6m 30s'},
+  {id:'T-038',title:'/brainstorm boss cuối',status:'cancelled',kind:'skill',when:'Hôm qua',dur:'1m 02s'},
+  {id:'T-037',title:'/bug-report rơi FPS khi nổ',status:'completed',kind:'skill',when:'Hôm qua',dur:'2m 15s'}
+];
+const SESSIONS = [
+  {id:'a91f3c',label:'T-042, /design-review',ext:false,live:true},
+  {id:'7c20de',label:'Phiên terminal, 13:20',ext:true,live:false},
+  {id:'5be811',label:'T-041, /sprint-plan',ext:false,live:false}
+];
+const STATUS_VI = {running:'Running',waiting:'Waiting',completed:'Completed',failed:'Failed',unknown:'Unknown',cancelled:'Cancelled',queued:'Đang chờ lượt'};
+
+const state = {
+  agent:'game-designer', agentQ:'', skill:'/design-review', cfgTab:'hooks', hooksInstalled:true,
+  step:'s7', tlMode:'gantt', toolFilter:'all', logLvl:'all', logQ:'', logSrc:'all',
+  waiting:true, permPending:true, session:'a91f3c', histFilter:'all'
+};
+
+/* ---------- Helpers ---------- */
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const st = s => `<span class="status" data-s="${s}">${STATUS_VI[s]}</span>`;
+const fmt = sec => { sec = Math.max(0, Math.round(sec)); const m = Math.floor(sec/60), s = sec%60; return m ? `${m}m ${String(s).padStart(2,'0')}s` : `${s}s`; };
+const agentName = id => id === 'main' ? 'Main session' : (AGENTS.find(a => a.id === id)?.name || id);
+function toast(msg){ const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2200); }
+function confirmDlg(title, bodyHtml, okLabel, onOk){
+  const d = $('#dlg'); $('#dlg-title').textContent = title; $('#dlg-body').innerHTML = bodyHtml; $('#dlg-ok').textContent = okLabel;
+  d.returnValue = ''; d.onclose = () => { if (d.returnValue === 'ok') onOk(); }; d.showModal();
+}
+const current = () => TASKS.find(t => t.status === 'running' || t.status === 'waiting');
+const queued = () => TASKS.filter(t => t.status === 'queued');
+
+/* ---------- Views ---------- */
+const VIEWS = {};
+
+VIEWS.dashboard = () => {
+  const cur = current();
+  const runningSubs = STEPS.filter(s => s.lane !== 'main' && (s.status==='running'||s.status==='waiting'));
+  return `
+  <div class="view-head"><div><h1>Tổng quan</h1><p>Việc đang chạy, tình trạng kết nối và cấu hình đọc được từ project.</p></div></div>
+  <div class="grid2">
+    <div class="stack">
+      <div class="panel"><div class="panel-b">
+        ${cur ? `<div class="now"><div><div class="muted small">Task đang chạy, ${cur.id}</div><h2>${esc(cur.title)}</h2></div>${st(cur.status)}</div>
+        <div class="row small muted" style="margin-top:6px">Đã chạy <b class="mono" data-live="0" style="color:var(--text)">${fmt(sNow())}</b>, session a91f3c</div>
+        <div class="agent-strip">${LANES.map(l => { const last = [...STEPS].reverse().find(s => s.lane===l.id); return `<div class="agent-chip"><b class="small">${l.name}</b>${st(last.status)}</div>`; }).join('')}</div>
+        ${state.waiting ? `<p style="margin:14px 0 0">Claude đang hỏi bạn một câu. <a href="#tasks">Trả lời trong Task Center</a></p>` : ''}`
+        : `<div class="empty">Không có task nào đang chạy. <a href="#tasks">Tạo task mới</a></div>`}
+      </div></div>
+      <div class="panel"><div class="panel-h"><h3>Hoạt động gần đây</h3><a href="#tasks" class="small">Xem tất cả</a></div>
+        <div class="tablewrap"><table><thead><tr><th>Task</th><th>Trạng thái</th><th>Bắt đầu</th><th>Thời lượng</th></tr></thead><tbody>
+        ${TASKS.filter(t => t.status!=='queued').slice(0,6).map(t => `<tr><td><span class="muted small">${t.id}</span> ${esc(t.title)}</td><td>${st(t.status)}</td><td>${t.when}</td><td>${t.status==='waiting'||t.status==='running'?'<span class="mono" data-live="0"></span>':t.dur}</td></tr>`).join('')}
+        </tbody></table></div></div>
+    </div>
+    <div class="stack">
+      <div class="panel"><div class="panel-h"><h3>Hàng đợi</h3><span class="muted small">${queued().length} task</span></div>
+        ${queued().length ? `<ul class="queue">${queued().map((t,i) => `<li><span class="pos">${i+1}</span><div class="t"><b>${esc(t.title)}</b><span class="muted small">${t.id}</span></div></li>`).join('')}</ul>` : '<div class="empty">Hàng đợi trống.</div>'}
+      </div>
+      <div class="panel"><div class="panel-h"><h3>Tình trạng hệ thống</h3><a href="#preferences" class="small">Kiểm tra lại</a></div><div class="panel-b">
+        <ul class="checks">
+          <li><span class="mark ok">✓</span><div><b>Backend nhận event</b><div class="muted small">Event cuối cách đây 2 giây</div></div></li>
+          <li><span class="mark ok">✓</span><div><b>Claude Code 2.x</b><div class="muted small">Đã đăng nhập</div></div></li>
+          <li><span class="mark ${state.hooksInstalled?'ok':'warn'}">${state.hooksInstalled?'✓':'!'}</span><div><b>Hook giám sát</b><div class="muted small">${state.hooksInstalled?'Đã cài trong settings.local.json':'Chưa cài, Monitor sẽ không có dữ liệu'}</div></div></li>
+          <li><span class="mark ok">✓</span><div><b>Project hợp lệ</b><div class="muted small">Tìm thấy thư mục .claude/</div></div></li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+  <div class="panel" style="margin-top:16px"><div class="panel-h"><h3>Cấu hình đọc từ .claude/</h3></div>
+    <div class="counts" style="border-top:0">
+      <a href="#agents"><b>${AGENTS.length}</b><span>agents</span></a>
+      <a href="#skills"><b>${SKILLS.length}</b><span>skills</span></a>
+      <a href="#config" data-cfg="rules"><b>${RULES.length}</b><span>rules</span></a>
+      <a href="#config" data-cfg="hooks"><b>${HOOKS_CCGS.length}</b><span>hooks của CCGS</span></a>
+      <a href="#config" data-cfg="templates"><b>${TEMPLATES.length}</b><span>templates</span></a>
+    </div>
+  </div>`;
+};
+
+VIEWS.agents = () => {
+  const q = state.agentQ.toLowerCase();
+  const list = AGENTS.filter(a => !q || a.name.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q));
+  const a = AGENTS.find(x => x.id === state.agent) || AGENTS[0];
+  const tiers = ['Director','Lead','Specialist'];
+  return `
+  <div class="view-head"><div><h1>Agents</h1><p>Định nghĩa agent đọc từ <code>.claude/agents/</code>. Đây là cấu hình, không có trạng thái chạy; xem lần chạy thực tế ở Agent Monitor.</p></div></div>
+  <div class="split">
+    <div class="panel">
+      <div class="panel-b" style="border-bottom:1px solid var(--line)"><input type="search" id="agent-q" placeholder="Tìm theo tên hoặc mô tả" value="${esc(state.agentQ)}" aria-label="Tìm agent"></div>
+      <div class="list-scroll" role="listbox" aria-label="Danh sách agent">
+        ${tiers.map(t => { const xs = list.filter(x => x.tier===t); return xs.length ? `<div class="tier"><h4>${t} (${xs.length})</h4>${xs.map(x => `<button class="item" role="option" data-agent="${x.id}" aria-selected="${x.id===a.id}"><b>${x.name}</b><span>${esc(x.desc)}</span></button>`).join('')}</div>` : ''; }).join('') || '<div class="empty">Không có agent khớp.</div>'}
+      </div>
+    </div>
+    <div class="stack">
+      <div class="panel"><div class="panel-h"><h3>${a.name}</h3><button class="btn sm" data-act="edit-agent">Sửa file</button></div><div class="panel-b">
+        <dl class="meta">
+          <dt>Tên file</dt><dd><code>.claude/agents/${a.id}.md</code></dd>
+          <dt>Cấp</dt><dd>${a.tier}</dd>
+          <dt>Model</dt><dd>${a.model}</dd>
+          <dt>Tools được phép</dt><dd>${a.tools.map(t => `<span class="tag">${t}</span>`).join(' ')}</dd>
+          <dt>Mô tả</dt><dd>${esc(a.desc)}</dd>
+        </dl></div></div>
+      <div class="panel"><div class="panel-h"><h3>Thống kê sử dụng</h3><span class="muted small">30 ngày gần nhất</span></div><div class="panel-b">
+        <div class="statrow"><div><b>${a.runs}</b><span>lần được gọi</span></div><div><b>${a.ok}%</b><span>thành công</span></div><div><b>${a.avg}</b><span>thời lượng trung bình</span></div></div>
+      </div></div>
+      <div class="panel"><div class="panel-h"><h3>Nội dung file</h3></div><div class="panel-b">
+<pre class="md">---
+name: ${a.id}
+description: ${esc(a.desc)}
+tools: ${a.tools.join(', ')}
+model: ${a.model}
+---
+
+Bạn là ${a.name} của studio. ${esc(a.desc)}
+
+## Nguyên tắc
+- Hỏi lại người dùng trước khi ra quyết định lớn.
+- Đưa ra 2–3 phương án kèm đánh đổi.
+- Không tự ý sửa file ngoài phạm vi được giao.</pre>
+      </div></div>
+    </div>
+  </div>`;
+};
+
+VIEWS.skills = () => {
+  const s = SKILLS.find(x => x.name === state.skill) || SKILLS[0];
+  return `
+  <div class="view-head"><div><h1>Skills</h1><p>Slash command đọc từ <code>.claude/skills/</code>. Chạy một skill sẽ tạo task trong hàng đợi.</p></div></div>
+  <div class="split">
+    <div class="panel"><div class="list-scroll" role="listbox" aria-label="Danh sách skill">
+      ${SKILLS.map(x => `<button class="item" role="option" data-skill="${x.name}" aria-selected="${x.name===s.name}"><b>${x.name} <span class="muted" style="display:inline;font-weight:400">${esc(x.args)}</span></b><span>${esc(x.desc)}</span></button>`).join('')}
+    </div></div>
+    <div class="stack">
+      <div class="panel"><div class="panel-h"><h3>${s.name}</h3><span class="muted small">Đã chạy ${s.runs} lần</span></div><div class="panel-b">
+        <p style="margin-top:0">${esc(s.desc)}</p>
+        <dl class="meta"><dt>File</dt><dd><code>.claude/skills/${s.name.slice(1)}/SKILL.md</code></dd>
+        <dt>Agent được nhắc tới</dt><dd>${s.agents.map(id => `<a href="#agents" data-agent-link="${id}">${agentName(id)}</a>`).join(', ')}</dd></dl>
+      </div></div>
+      <div class="panel"><div class="panel-h"><h3>Chạy skill</h3></div><div class="panel-b">
+        <div class="field"><label for="skill-args">Tham số</label><input type="text" id="skill-args" placeholder="${esc(s.args || 'Không cần tham số')}" ${s.args?'':'disabled'}><span class="hint">Lệnh sẽ chạy: <code id="skill-preview">${s.name}</code></span></div>
+        <div class="row"><button class="btn primary" data-act="run-skill">Thêm vào hàng đợi</button><span class="muted small">${current() ? 'Đang có task chạy; task này sẽ chờ tới lượt.' : 'Sẽ chạy ngay.'}</span></div>
+      </div></div>
+      <div class="panel"><div class="panel-h"><h3>Lịch sử chạy</h3></div><div class="tablewrap"><table><thead><tr><th>Task</th><th>Trạng thái</th><th>Khi</th></tr></thead><tbody>
+        ${TASKS.filter(t => t.title.startsWith(s.name)).map(t => `<tr><td>${t.id} ${esc(t.title)}</td><td>${st(t.status)}</td><td>${t.when||'Chưa chạy'}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">Chưa có lần chạy nào.</td></tr>'}
+      </tbody></table></div></div>
+    </div>
+  </div>`;
+};
+
+VIEWS.config = () => {
+  const tab = state.cfgTab;
+  const tabs = [['hooks','Hooks'],['rules','Rules'],['workflows','Workflows'],['templates','Templates']];
+  let body = '';
+  if (tab === 'hooks') body = `
+    <div class="stack">
+      <div class="panel"><div class="panel-h"><h3>Hook của CCGS</h3><span class="muted small">.claude/settings.json, chỉ xem</span></div>
+        <div class="tablewrap"><table><thead><tr><th>Event</th><th>Matcher</th><th>Lệnh</th><th>Mục đích</th></tr></thead><tbody>
+        ${HOOKS_CCGS.map(h => `<tr><td>${h.event}</td><td><code>${h.matcher}</code></td><td><code>${h.cmd}</code></td><td>${h.desc}</td></tr>`).join('')}
+        </tbody></table></div></div>
+      <div class="panel"><div class="panel-h"><h3>Hook giám sát của Studio</h3>
+        ${state.hooksInstalled ? `<button class="btn sm danger" data-act="toggle-hooks">Gỡ hook</button>` : `<button class="btn sm primary" data-act="toggle-hooks">Cài hook</button>`}</div>
+        <div class="panel-b"><p style="margin-top:0">${state.hooksInstalled ? 'Đã cài trong <code>.claude/settings.local.json</code>. File <code>settings.json</code> của CCGS không bị thay đổi.' : 'Chưa cài. Monitor sẽ không nhận được event cho tới khi cài.'}</p>
+        <div class="chips">${STUDIO_EVENTS.map(e => `<span class="tag">${e}</span>`).join('')}</div>
+        <p class="muted small" style="margin-bottom:0">Script luôn thoát với mã 0 và trả về dưới 1 giây, nên không chặn hay làm chậm Claude Code.</p></div></div>
+    </div>`;
+  if (tab === 'rules') body = `<div class="panel"><div class="tablewrap"><table><thead><tr><th>Rule</th><th>Áp dụng cho</th><th>Nội dung chính</th></tr></thead><tbody>
+    ${RULES.map(r => `<tr><td><code>${r.name}</code></td><td><code>${r.scope}</code></td><td>${r.desc}</td></tr>`).join('')}</tbody></table></div></div>`;
+  if (tab === 'workflows') body = `<div class="stack">${WORKFLOWS.map((w,i) => `<div class="panel"><div class="panel-h"><h3>${w.name}</h3><button class="btn sm" data-act="run-wf" data-i="${i}">Chạy workflow</button></div><div class="panel-b"><p style="margin-top:0">${w.desc}</p><div class="row">${w.steps.map((s,j) => `${j?'<span class="muted">rồi</span>':''}<span class="tag">${s}</span>`).join(' ')}</div></div></div>`).join('')}
+    <p class="muted small">Cách CCGS định nghĩa workflow sẽ được xác nhận ở Phase 0; đây là cách hiển thị giả định.</p></div>`;
+  if (tab === 'templates') body = `<div class="panel"><div class="tablewrap"><table><thead><tr><th>Template</th><th></th></tr></thead><tbody>
+    ${TEMPLATES.map(t => `<tr><td><code>.claude/docs/templates/${t}</code></td><td style="text-align:right"><button class="btn sm" data-act="copy-tpl">Sao chép nội dung</button></td></tr>`).join('')}</tbody></table></div></div>`;
+  return `
+  <div class="view-head"><div><h1>Rules, Hooks, Workflows, Templates</h1><p>Các thành phần cấu hình khác của CCGS.</p></div></div>
+  <div class="tabs" role="tablist">${tabs.map(([k,l]) => `<button role="tab" data-cfg="${k}" aria-selected="${k===tab}">${l}</button>`).join('')}</div>
+  ${body}`;
+};
+
+VIEWS.projects = () => `
+  <div class="view-head"><div><h1>Project</h1><p>Thư mục project dùng CCGS mà Studio đang làm việc. Chỉ một project hoạt động tại một thời điểm.</p></div></div>
+  <div class="grid-eq">
+    <div class="panel"><div class="panel-h"><h3>Project hiện tại</h3></div><div class="panel-b">
+      <div class="field"><label for="proj-path">Đường dẫn</label><input type="text" id="proj-path" value="~/games/ember-quest"></div>
+      <ul class="checks">
+        <li><span class="mark ok">✓</span><div>Có thư mục <code>.claude/</code></div></li>
+        <li><span class="mark ok">✓</span><div>Tìm thấy ${AGENTS.length} agents, ${SKILLS.length} skills</div></li>
+        <li><span class="mark ok">✓</span><div>Là git repository</div></li>
+      </ul>
+      <div class="row" style="margin-top:10px"><button class="btn" data-act="check-proj">Kiểm tra lại</button></div>
+    </div></div>
+    <div class="stack">
+      <div class="panel"><div class="panel-h"><h3>Git</h3></div><div class="panel-b">
+        <dl class="meta"><dt>Branch</dt><dd><code>feature/combo-system</code></dd><dt>Chưa commit</dt><dd>2 file đã sửa, 1 file mới</dd><dt>Commit cuối</dt><dd>“Thêm hitbox cho dash-attack”, 2 giờ trước</dd></dl>
+      </div></div>
+      <div class="panel"><div class="panel-h"><h3>Project đã lưu</h3><span class="tag">P2</span></div>
+        <ul class="queue">
+          <li><div class="t"><b>ember-quest</b><span class="muted small">~/games/ember-quest</span></div><span class="tag">Đang dùng</span></li>
+          <li><div class="t"><b>tiny-farm</b><span class="muted small">~/games/tiny-farm</span></div><button class="btn sm" data-act="switch-proj">Chuyển sang</button></li>
+        </ul></div>
+    </div>
+  </div>`;
+
+VIEWS.tasks = () => {
+  const cur = current();
+  const hf = state.histFilter;
+  const hist = TASKS.filter(t => !['queued','running','waiting'].includes(t.status) && (hf==='all' || t.status===hf));
+  return `
+  <div class="view-head"><div><h1>Task Center</h1><p>Mỗi lần chỉ chạy một task. Task mới vào cuối hàng đợi.</p></div></div>
+  <div class="grid2">
+    <div class="stack">
+      ${cur ? `<div class="panel"><div class="panel-h"><div><div class="muted small">Đang chạy, ${cur.id}</div><h3>${esc(cur.title)}</h3></div><div class="row">${st(cur.status)}<button class="btn sm danger" data-act="stop">Dừng task</button></div></div>
+        <div class="panel-b stack">
+          ${state.waiting ? `<div class="question">
+            <h3>Claude hỏi: hệ thống combat nên theo hướng nào?</h3>
+            <div class="muted small">Main session, lúc 14:09:30</div>
+            <div class="opt-list">
+              <label class="opt"><input type="radio" name="ans" value="Turn-based" checked><div><b>Turn-based</b><div class="small muted">Dễ cân bằng, hợp với nhịp chậm của game hiện tại.</div></div></label>
+              <label class="opt"><input type="radio" name="ans" value="Real-time"><div><b>Real-time</b><div class="small muted">Hợp với hệ thống combo, nhưng tốn công cài đặt hơn.</div></div></label>
+              <label class="opt"><input type="radio" name="ans" value="other"><div style="flex:1"><b>Câu trả lời khác</b><input type="text" id="ans-other" placeholder="Nhập câu trả lời" style="margin-top:6px"></div></label>
+            </div>
+            <button class="btn primary" data-act="answer">Gửi câu trả lời</button>
+          </div>` : ''}
+          ${state.permPending ? `<div class="question" style="border-color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,var(--surface))">
+            <h3>Gameplay Programmer xin quyền chạy lệnh</h3>
+            <pre class="md" style="margin:8px 0">godot --headless --script tools/estimate_combo.gd</pre>
+            <div class="row"><button class="btn primary" data-act="perm-allow">Cho phép</button><button class="btn" data-act="perm-deny">Từ chối</button></div>
+          </div>` : ''}
+          ${!state.waiting && !state.permPending ? '<p class="muted" style="margin:0">Không có câu hỏi nào đang chờ. Task đang chạy tiếp.</p>' : ''}
+          <div class="row small muted">Đã chạy <span class="mono" data-live="0"></span>. <a href="#live">Xem session trực tiếp</a></div>
+        </div></div>`
+        : `<div class="panel"><div class="empty">Không có task đang chạy.</div></div>`}
+      <div class="panel"><div class="panel-h"><h3>Lịch sử</h3>
+        <div class="chips">${[['all','Tất cả'],['completed','Completed'],['failed','Failed'],['cancelled','Cancelled']].map(([k,l]) => `<button class="chip" data-hist="${k}" aria-pressed="${k===hf}">${l}</button>`).join('')}</div></div>
+        <div class="tablewrap"><table><thead><tr><th>Task</th><th>Trạng thái</th><th>Bắt đầu</th><th>Thời lượng</th><th></th></tr></thead><tbody>
+        ${hist.map(t => `<tr><td><span class="muted small">${t.id}</span> ${esc(t.title)}</td><td>${st(t.status)}</td><td>${t.when}</td><td>${t.dur}</td><td style="text-align:right"><button class="btn sm" data-act="resume" data-id="${t.id}">Tiếp tục</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">Không có task nào.</td></tr>'}
+        </tbody></table></div></div>
+    </div>
+    <div class="stack">
+      <div class="panel"><div class="panel-h"><h3>Tạo task</h3></div><div class="panel-b">
+        <div class="field"><label for="t-skill">Skill</label><select id="t-skill"><option value="">Không dùng skill, chỉ prompt</option>${SKILLS.map(s => `<option>${s.name}</option>`).join('')}</select></div>
+        <div class="field"><label for="t-prompt">Prompt hoặc tham số</label><textarea id="t-prompt" placeholder="Ví dụ: Viết test cho hệ thống inventory"></textarea></div>
+        <div class="row" style="align-items:flex-start">
+          <div class="field" style="flex:1;min-width:120px"><label for="t-model">Model</label><select id="t-model"><option>Mặc định</option><option>opus</option><option>sonnet</option><option>haiku</option></select></div>
+          <div class="field" style="flex:1;min-width:150px"><label for="t-perm">Quyền</label><select id="t-perm"><option>Hỏi trước khi sửa</option><option>Tự sửa file</option><option>Chỉ lập kế hoạch</option></select></div>
+        </div>
+        <button class="btn primary" data-act="create-task">Thêm vào hàng đợi</button>
+      </div></div>
+      <div class="panel"><div class="panel-h"><h3>Hàng đợi</h3><span class="muted small">${queued().length} task</span></div>
+        ${queued().length ? `<ul class="queue">${queued().map((t,i,arr) => `<li><span class="pos">${i+1}</span><div class="t"><b>${esc(t.title)}</b><span class="muted small">${t.id}</span></div>
+          <button class="btn sm" data-act="up" data-id="${t.id}" ${i===0?'disabled':''} aria-label="Đưa lên">Lên</button>
+          <button class="btn sm" data-act="down" data-id="${t.id}" ${i===arr.length-1?'disabled':''} aria-label="Đưa xuống">Xuống</button>
+          <button class="btn sm danger" data-act="cancel" data-id="${t.id}">Huỷ</button></li>`).join('')}</ul>` : '<div class="empty">Hàng đợi trống.</div>'}
+      </div>
+    </div>
+  </div>`;
+};
+
+VIEWS.live = () => {
+  const s = SESSIONS.find(x => x.id === state.session);
+  return `
+  <div class="view-head"><div><h1>Session trực tiếp</h1><p>Hội thoại của session, cập nhật theo thời gian thực.</p></div>
+    <div class="field" style="margin:0;min-width:240px"><label for="sess">Session</label><select id="sess">${SESSIONS.map(x => `<option value="${x.id}" ${x.id===s.id?'selected':''}>${x.label}${x.ext?' (External)':''}${x.live?' (đang chạy)':''}</option>`).join('')}</select></div></div>
+  ${s.id !== 'a91f3c' ? `<div class="panel"><div class="panel-b">${s.ext ? '<span class="tag ext">External</span> ' : ''}Session đã kết thúc. Trong bản thật, toàn bộ hội thoại được mở lại từ lịch sử đã lưu.</div></div>` : `
+  <div class="panel"><div class="panel-b conv">
+    <div class="msg user"><div class="who">Bạn, 14:02:10</div><div class="bubble"><code>/design-review design/gdd/combat-system.md</code></div></div>
+    <div class="msg ai"><div class="who">Claude</div><div class="bubble">Tôi sẽ review tài liệu combat theo ba góc: gameplay, cân bằng số liệu và khả thi kỹ thuật.</div></div>
+    <details class="tool"><summary><b>Read</b><code>design/gdd/combat-system.md</code>${st('completed')}</summary><div class="body small muted">312 dòng, 0.2 giây</div></details>
+    <div class="sub-call stack" style="gap:8px">
+      <details class="tool"><summary><b>Task</b> Game Designer ${st('completed')}<span class="muted small">2m 46s</span></summary><div class="body small">Kết quả: 4 nhận xét, 1 vấn đề lớn về nhịp độ combo. <a href="#timeline" data-step-link="s3">Mở trong Timeline</a></div></details>
+      <details class="tool"><summary><b>Task</b> Systems Designer ${st('completed')}<span class="muted small">3m 32s</span></summary><div class="body small">Sửa 1 file: công thức chí mạng. <a href="#tool-activity">Xem diff</a></div></details>
+      <details class="tool"><summary><b>Task</b> Gameplay Programmer ${st('failed')}<span class="muted small">2m 05s</span></summary><div class="body small">Bash hết thời gian sau 120 giây.</div></details>
+      <details class="tool" open><summary><b>Task</b> Gameplay Programmer ${st('running')}<span class="mono small" data-live="432"></span></summary><div class="body small">Thử lại, bỏ qua bước build.</div></details>
+    </div>
+    <div class="msg ai"><div class="who">Claude</div><div class="bubble">Trước khi chốt review, tôi cần biết hướng đi bạn muốn cho combat.</div></div>
+    ${state.waiting ? `<div class="question"><b>Đang chờ bạn trả lời:</b> turn-based hay real-time? <a href="#tasks">Trả lời</a></div>` : `<div class="msg user"><div class="who">Bạn</div><div class="bubble">${esc(state.answer||'')}</div></div>`}
+  </div></div>`}`;
+};
+
+VIEWS['agent-monitor'] = () => {
+  const inv = STEPS.filter(s => s.lane !== 'main');
+  return `
+  <div class="view-head"><div><h1>Agent Monitor</h1><p>Mỗi dòng là một lần gọi agent trong session a91f3c. Trạng thái chỉ lấy từ event; thiếu dữ liệu thì hiện Unknown.</p></div>
+    <div class="legend small">${['running','waiting','completed','failed','unknown'].map(st).join('')}</div></div>
+  <div class="panel"><div class="tablewrap"><table><thead><tr><th>Agent</th><th>Được gọi bởi</th><th>Nhiệm vụ được giao</th><th>Trạng thái</th><th>Bắt đầu</th><th>Thời lượng</th></tr></thead><tbody>
+    <tr class="click" data-step-link="s8"><td><b>Main session</b></td><td class="muted">Bạn</td><td>/design-review combat-system.md</td><td>${st(state.waiting?'waiting':'running')}</td><td>14:02:10</td><td class="mono" data-live="0"></td></tr>
+    ${inv.map(s => { const run = s.end===null; return `<tr class="click" data-step-link="${s.id}"><td style="padding-left:28px"><b>${agentName(s.lane)}</b></td><td class="muted">Main session</td><td>${esc(s.input)}</td><td>${st(s.status)}</td><td>${s.status==='unknown'?'?':clock(s.start)}</td><td class="mono" ${run?`data-live="${s.start}"`:''}>${run?'':s.status==='unknown'?'?':fmt(s.end-s.start)}</td></tr>`; }).join('')}
+  </tbody></table></div></div>
+  <p class="muted small">Theo hiểu biết hiện tại, subagent không gọi được subagent khác nên cây chỉ sâu một cấp. Phase 0 sẽ xác nhận điều này với CCGS.</p>`;
+};
+function clock(sec){ const base = 14*3600+2*60+10 + Math.round(sec); const h=Math.floor(base/3600), m=Math.floor(base%3600/60), s=base%60; return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; }
+
+VIEWS.timeline = () => {
+  const total = 540;
+  const sel = STEPS.find(s => s.id === state.step) || STEPS[0];
+  const pct = v => (Math.min(v,total)/total*100).toFixed(3);
+  const ticks = Array.from({length:10},(_,i)=>i*60);
+  const ordered = [...STEPS].sort((a,b) => a.start-b.start);
+  const selEnd = sel.end===null ? null : sel.end;
+  return `
+  <div class="view-head"><div><h1>Execution Timeline</h1><p>Session a91f3c, task T-042. Bấm vào một bước để xem input, output và thời lượng.</p></div>
+    <div class="chips" role="group" aria-label="Kiểu hiển thị"><button class="chip" data-tl="gantt" aria-pressed="${state.tlMode==='gantt'}">Theo làn agent</button><button class="chip" data-tl="list" aria-pressed="${state.tlMode==='list'}">Danh sách</button></div></div>
+  <div class="panel">
+    ${state.tlMode==='gantt' ? `<div class="panel-b"><div class="tablewrap"><div class="tl" style="min-width:680px">
+      <div class="tl-ruler"><div></div><div class="track">${ticks.map(t => `<span class="tick" style="left:${pct(t)}%">${t/60} phút</span>`).join('')}</div></div>
+      ${LANES.map(l => `<div class="tl-lane"><div class="lab"><b>${l.name}</b><span>${l.sub}</span></div><div class="track">
+        ${STEPS.filter(s => s.lane===l.id).map(s => { const end = s.end===null ? sNow() : s.end; return `<button class="bar" data-s="${s.status}" data-step="${s.id}" ${s.end===null?`data-grow="${s.start}"`:''} aria-pressed="${s.id===sel.id}" style="left:${pct(s.start)}%;width:max(10px, ${(pct(end)-pct(s.start)).toFixed(3)}%)" title="${esc(s.label)}">${esc(s.label)}</button>`; }).join('')}
+      </div></div>`).join('')}
+      <div style="position:absolute;inset:28px 0 0 var(--label);pointer-events:none"><div class="nowline" id="nowline" style="left:${pct(sNow())}%"><span>Bây giờ</span></div></div>
+    </div></div>
+    <div class="legend small" style="margin-top:12px">${['running','waiting','completed','failed','unknown'].map(st).join('')}</div></div>`
+    : `<ol class="steps">${ordered.map(s => `<li data-step="${s.id}" ${s.id===sel.id?'style="background:var(--accent-soft)"':''}><span class="mono small">${s.status==='unknown'?'?':clock(s.start)}</span><span><b>${agentName(s.lane)}</b>: ${esc(s.label)}</span>${st(s.status)}</li>`).join('')}</ol>`}
+  </div>
+  <div class="panel" style="margin-top:16px"><div class="panel-h"><h3>${esc(sel.label)}</h3>${st(sel.status)}</div><div class="panel-b">
+    <dl class="detail-grid">
+      <dt>Agent</dt><dd>${agentName(sel.lane)}</dd>
+      <dt>Bắt đầu</dt><dd>${sel.status==='unknown'?'Không xác định':clock(sel.start)}</dd>
+      <dt>Thời lượng</dt><dd class="mono">${sel.status==='unknown'?'Không xác định':selEnd===null?`<span data-live="${sel.start}"></span> (đang tính)`:fmt(selEnd-sel.start)}</dd>
+      <dt>Input</dt><dd><pre class="md">${esc(sel.input)}</pre></dd>
+      <dt>Output</dt><dd><pre class="md">${esc(sel.output)}</pre></dd>
+    </dl>
+  </div></div>`;
+};
+
+VIEWS['tool-activity'] = () => {
+  const tools = ['all', ...new Set(TOOLCALLS.map(t => t.tool.startsWith('mcp__')?'MCP':t.tool))];
+  const f = state.toolFilter;
+  const rows = TOOLCALLS.filter(t => f==='all' || t.tool===f || (f==='MCP' && t.tool.startsWith('mcp__')));
+  return `
+  <div class="view-head"><div><h1>Tool và file</h1><p>Tool, skill, MCP và lệnh mà các agent đã gọi; file được đọc, tạo, sửa.</p></div></div>
+  <div class="panel"><div class="panel-h"><h3>Tool call</h3><div class="chips">${tools.map(t => `<button class="chip" data-tool="${t}" aria-pressed="${t===f}">${t==='all'?'Tất cả':t}</button>`).join('')}</div></div>
+    <div class="tablewrap"><table><thead><tr><th>Thời gian</th><th>Agent</th><th>Tool</th><th>Input</th><th>Trạng thái</th><th>Thời lượng</th></tr></thead><tbody>
+    ${rows.map(t => `<tr><td class="mono">${t.t}</td><td>${agentName(t.agent)}</td><td><b>${esc(t.tool)}</b></td><td><code>${esc(t.input)}</code></td><td>${st(t.status)}</td><td class="mono">${t.dur}</td></tr>`).join('')}
+    </tbody></table></div></div>
+  <div class="panel" style="margin-top:16px"><div class="panel-h"><h3>Hoạt động file</h3></div><div class="panel-b stack">
+    ${FILES.map(fl => `<div><div class="row"><span class="tag">${fl.op}</span><code>${fl.path}</code><span class="muted small">${agentName(fl.agent)}</span></div>
+      ${fl.diff ? `<div class="diff" style="margin-top:8px">${fl.diff.map(([k,l]) => `<div class="${k==='ctx'?'':k}">${k==='add'?'+ ':k==='del'?'- ':'  '}${esc(l)}</div>`).join('')}</div>` : ''}</div>`).join('')}
+  </div></div>`;
+};
+
+VIEWS.logs = () => {
+  const q = state.logQ.toLowerCase();
+  const rows = LOGS.filter(l => (state.logLvl==='all'||l.lvl===state.logLvl) && (state.logSrc==='all'||l.src===state.logSrc) && (!q || l.msg.toLowerCase().includes(q)));
+  const lvlColor = {info:'var(--done)',warn:'var(--wait)',error:'var(--fail)'};
+  return `
+  <div class="view-head"><div><h1>Logs và lỗi</h1><p>Log của Studio, Claude Code và hook. Giá trị bí mật được che trước khi lưu.</p></div></div>
+  <div class="panel"><div class="panel-b row" style="border-bottom:1px solid var(--line)">
+      <input type="search" id="log-q" placeholder="Tìm trong log" value="${esc(state.logQ)}" style="max-width:280px" aria-label="Tìm trong log">
+      <div class="chips">${[['all','Mọi mức'],['info','Info'],['warn','Warning'],['error','Error']].map(([k,l]) => `<button class="chip" data-lvl="${k}" aria-pressed="${k===state.logLvl}">${l}</button>`).join('')}</div>
+      <select id="log-src" style="max-width:180px" aria-label="Nguồn">${['all','Studio','Claude Code','Hook'].map(s => `<option value="${s}" ${s===state.logSrc?'selected':''}>${s==='all'?'Mọi nguồn':s}</option>`).join('')}</select>
+    </div>
+    <div class="tablewrap"><table><thead><tr><th>Thời gian</th><th>Mức</th><th>Nguồn</th><th>Nội dung</th></tr></thead><tbody>
+    ${rows.map(l => `<tr><td class="mono">${l.t}</td><td><b style="color:${lvlColor[l.lvl]}">${l.lvl==='warn'?'Warning':l.lvl==='error'?'Error':'Info'}</b></td><td>${l.src}</td><td>${l.redact ? esc(l.msg).replace('[đã che]','<span class="redacted">đã che</span>') : esc(l.msg)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Không có log khớp bộ lọc.</td></tr>'}
+    </tbody></table></div></div>`;
+};
+
+VIEWS.performance = () => {
+  const days = [['T3',5,1],['T4',7,0],['T5',4,2],['T6',8,1],['T7',3,0],['CN',2,0],['T2',6,1]];
+  const max = Math.max(...days.map(d => d[1]+d[2]));
+  const tok = [['Gameplay Programmer',412,96],['Game Designer',288,140],['Systems Designer',201,88],['Lead Programmer',176,52],['Main session',150,61],['QA Tester',64,20]];
+  const tmax = Math.max(...tok.map(t => t[1]+t[2]));
+  return `
+  <div class="view-head"><div><h1>Hiệu suất</h1><p>7 ngày gần nhất. Token lấy từ transcript; chi phí chỉ là ước tính vì bạn dùng gói subscription.</p></div></div>
+  <div class="panel"><div class="big">
+    <div><b>40</b><span>task đã chạy</span></div><div><b>88%</b><span>thành công (35 / 40)</span></div><div><b>4m 21s</b><span>thời lượng trung bình</span></div><div><b>1.66M</b><span>token, ước tính 9,40 USD</span></div>
+  </div></div>
+  <div class="grid-eq" style="margin-top:16px">
+    <div class="panel"><div class="panel-h"><h3>Task mỗi ngày</h3><div class="legend small"><span><span style="display:inline-block;width:10px;height:10px;background:var(--done);border-radius:2px"></span> thành công</span><span><span style="display:inline-block;width:10px;height:10px;background:var(--fail);border-radius:2px"></span> thất bại</span></div></div><div class="panel-b">
+      <div class="vbars">${days.map(([d,ok,bad]) => `<div class="col" title="${d}: ${ok} thành công, ${bad} thất bại"><span class="small">${ok+bad}</span><div class="stackbar" style="height:${((ok+bad)/max*120).toFixed(0)}px"><div class="ok" style="flex:${ok}"></div>${bad?`<div class="bad" style="flex:${bad}"></div>`:''}</div><small>${d}</small></div>`).join('')}</div>
+    </div></div>
+    <div class="panel"><div class="panel-h"><h3>Token theo agent (nghìn)</h3><div class="legend small"><span><span style="display:inline-block;width:10px;height:10px;background:var(--accent);border-radius:2px"></span> input</span><span><span style="display:inline-block;width:10px;height:10px;background:color-mix(in srgb,var(--accent) 45%,var(--surface));border-radius:2px"></span> output</span></div></div><div class="panel-b">
+      ${tok.map(([n,i,o]) => `<div class="hbar"><span class="small">${n}</span><div class="track"><div class="fill" style="width:${(i/tmax*100).toFixed(1)}%"></div><div class="fill alt" style="width:${(o/tmax*100).toFixed(1)}%"></div></div><span class="small mono" style="text-align:right">${i+o}k</span></div>`).join('')}
+    </div></div>
+  </div>
+  <div class="panel" style="margin-top:16px"><div class="panel-h"><h3>Hiệu suất theo agent</h3></div><div class="tablewrap"><table><thead><tr><th>Agent</th><th>Lần gọi</th><th>Thành công</th><th>Thời lượng TB</th></tr></thead><tbody>
+    ${[...AGENTS].sort((a,b)=>b.runs-a.runs).slice(0,6).map(a => `<tr><td>${a.name}</td><td>${a.runs}</td><td>${a.ok}%</td><td>${a.avg}</td></tr>`).join('')}
+  </tbody></table></div></div>`;
+};
+
+VIEWS.preferences = () => `
+  <div class="view-head"><div><h1>Cài đặt</h1><p>Lưu trên máy này. Server chỉ lắng nghe 127.0.0.1.</p></div></div>
+  <div class="grid-eq">
+    <div class="stack">
+      <div class="panel"><div class="panel-h"><h3>Kiểm tra môi trường</h3><button class="btn sm primary" data-act="doctor">Chạy kiểm tra</button></div><div class="panel-b">
+        <ul class="checks" id="doctor">
+          ${['Tìm thấy lệnh claude','Claude Code đã đăng nhập','Project có thư mục .claude/','Hook gửi được event test','Ghi được database SQLite'].map((c,i) => `<li data-i="${i}"><span class="mark pend">·</span><div>${c}</div></li>`).join('')}
+        </ul></div></div>
+      <div class="panel"><div class="panel-h"><h3>Đường dẫn</h3></div><div class="panel-b">
+        <div class="field"><label for="p-claude">Lệnh claude</label><input type="text" id="p-claude" value="/usr/local/bin/claude"><span class="hint">Phiên bản phát hiện: 2.x (mẫu)</span></div>
+      </div></div>
+    </div>
+    <div class="stack">
+      <div class="panel"><div class="panel-h"><h3>Mặc định khi chạy task</h3></div><div class="panel-b">
+        <div class="field"><label for="d-model">Model</label><select id="d-model"><option>Mặc định của Claude Code</option><option>opus</option><option>sonnet</option></select></div>
+        <div class="field"><label for="d-timeout">Thời gian chạy tối đa (phút)</label><input type="number" id="d-timeout" value="45" min="1"></div>
+      </div></div>
+      <div class="panel"><div class="panel-h"><h3>Dữ liệu</h3></div><div class="panel-b">
+        <div class="field"><label for="d-keep">Giữ session trong (ngày)</label><input type="number" id="d-keep" value="30" min="1"></div>
+        <div class="field"><label for="d-payload">Giới hạn payload mỗi event (KB)</label><input type="number" id="d-payload" value="64" min="1"></div>
+        <div class="field"><label for="d-redact">Mẫu che bí mật thêm (regex, mỗi dòng một mẫu)</label><textarea id="d-redact">STEAM_API_[A-Z0-9]+</textarea></div>
+      </div></div>
+      <div class="panel"><div class="panel-h"><h3>Arize Phoenix</h3><span class="tag">P2</span></div><div class="panel-b">
+        <label class="row"><input type="checkbox" id="px"> Gửi trace tới Phoenix</label>
+        <div class="field" style="margin-top:10px"><label for="px-url">Endpoint</label><input type="text" id="px-url" value="http://127.0.0.1:6006" disabled></div>
+      </div></div>
+      <div class="row"><button class="btn primary" data-act="save-prefs">Lưu cài đặt</button></div>
+    </div>
+  </div>`;
+
+/* ---------- Render & routing ---------- */
+const ORDER = Object.keys(VIEWS);
+function route(){ const h = location.hash.slice(1); return ORDER.includes(h) ? h : 'dashboard'; }
+function render(){
+  const v = route();
+  $('#view').innerHTML = VIEWS[v]();
+  document.querySelectorAll('.nav-group a').forEach(a => { if (a.dataset.v===v) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current'); });
+  const cur = current();
+  const ts = $('#top-status');
+  if (cur){ ts.style.display=''; ts.dataset.s = cur.status; ts.textContent = state.waiting ? 'Đang chờ bạn trả lời' : `Đang chạy ${cur.id}`; }
+  else ts.style.display='none';
+  $('#top-queue').textContent = queued().length ? `${queued().length} task trong hàng đợi` : '';
+  $('#c-agents').textContent = AGENTS.length; $('#c-skills').textContent = SKILLS.length;
+  $('#c-queue').textContent = queued().length || '';
+  const errs = LOGS.filter(l => l.lvl==='error').length; $('#c-errors').textContent = errs || '';
+  tick();
+}
+function tick(){
+  const now = sNow();
+  document.querySelectorAll('[data-live]').forEach(el => { el.textContent = fmt(now - Number(el.dataset.live)); });
+  document.querySelectorAll('[data-grow]').forEach(el => { const s = Number(el.dataset.grow); el.style.width = `max(10px, ${((Math.min(now,540)-s)/540*100).toFixed(3)}%)`; });
+  const nl = $('#nowline'); if (nl) nl.style.left = (Math.min(now,540)/540*100).toFixed(3)+'%';
+}
+setInterval(() => { if (current()) tick(); }, 1000);
+window.addEventListener('hashchange', () => { render(); $('#main').scrollTop = 0; });
+
+/* ---------- Interactions ---------- */
+document.addEventListener('click', e => {
+  const t = e.target.closest('button, a, tr, li');
+  if (!t) return;
+  const d = t.dataset;
+  if (d.agent){ state.agent = d.agent; render(); return; }
+  if (d.agentLink){ state.agent = d.agentLink; return; }
+  if (d.skill){ state.skill = d.skill; render(); return; }
+  if (d.cfg){ state.cfgTab = d.cfg; if (t.tagName==='BUTTON') render(); return; }
+  if (d.step){ state.step = d.step; render(); return; }
+  if (d.stepLink){ state.step = d.stepLink; if (t.tagName!=='A') location.hash = 'timeline'; return; }
+  if (d.tl){ state.tlMode = d.tl; render(); return; }
+  if (d.tool){ state.toolFilter = d.tool; render(); return; }
+  if (d.lvl){ state.logLvl = d.lvl; render(); return; }
+  if (d.hist){ state.histFilter = d.hist; render(); return; }
+  const act = d.act; if (!act) return;
+  const byId = id => TASKS.find(x => x.id === id);
+  const nextId = () => 'T-0' + (Math.max(...TASKS.map(x => Number(x.id.slice(2)))) + 1);
+  switch(act){
+    case 'run-skill': {
+      const s = SKILLS.find(x => x.name === state.skill); const args = ($('#skill-args')?.value || '').trim();
+      const qs0 = queued(); const at0 = qs0.length ? TASKS.indexOf(qs0[qs0.length-1]) + 1 : 1;
+      TASKS.splice(at0, 0, {id:nextId(),title:`${s.name}${args?' '+args:''}`,status:'queued',kind:'skill',when:'',dur:''});
+      render(); toast('Đã thêm vào hàng đợi'); break; }
+    case 'create-task': {
+      const sk = $('#t-skill').value, p = $('#t-prompt').value.trim();
+      if (!sk && !p){ toast('Nhập prompt hoặc chọn skill'); $('#t-prompt').focus(); return; }
+      const qs = queued(); const at = qs.length ? TASKS.indexOf(qs[qs.length-1]) + 1 : 1;
+      TASKS.splice(at, 0, {id:nextId(),title:(sk?sk+' ':'')+p,status:'queued',kind:sk?'skill':'prompt',when:'',dur:''});
+      render(); toast('Đã thêm vào hàng đợi'); break; }
+    case 'up': case 'down': {
+      const qs = queued(); const i = qs.findIndex(x => x.id===d.id); const j = act==='up'?i-1:i+1;
+      const a = TASKS.indexOf(qs[i]), b = TASKS.indexOf(qs[j]); [TASKS[a], TASKS[b]] = [TASKS[b], TASKS[a]]; render(); break; }
+    case 'cancel': confirmDlg('Huỷ task trong hàng đợi?', `<p>${esc(byId(d.id).title)} sẽ bị xoá khỏi hàng đợi. Task chưa chạy nên không có gì bị thay đổi.</p>`, 'Huỷ task', () => { byId(d.id).status='cancelled'; byId(d.id).when='Chưa chạy'; byId(d.id).dur='0s'; render(); toast('Đã huỷ task'); }); break;
+    case 'stop': confirmDlg('Dừng task đang chạy?', '<p>Tiến trình Claude Code sẽ bị ngắt. File đã sửa vẫn giữ nguyên; bạn có thể xem diff hoặc tiếp tục session sau.</p>', 'Dừng task', () => {
+      const c = current(); c.status='cancelled'; c.dur=fmt(sNow()); state.waiting=false; state.permPending=false;
+      LOGS.push({t:'14:10:02',lvl:'warn',src:'Studio',msg:`Task ${c.id} bị dừng bởi người dùng.`});
+      const n = queued()[0]; if (n){ n.status='running'; n.when='Vừa xong'; }
+      render(); toast('Đã dừng task'); }); break;
+    case 'answer': {
+      const v = document.querySelector('input[name=ans]:checked').value; const ans = v==='other' ? ($('#ans-other').value.trim()||'(trống)') : v;
+      state.waiting=false; state.answer=ans; const c=current(); if (c) c.status='running';
+      const s8 = STEPS.find(s => s.id==='s8'); s8.status='completed'; s8.end=sNow(); s8.output='Người dùng chọn: '+ans;
+      LOGS.push({t:'14:10:00',lvl:'info',src:'Studio',msg:`Đã gửi câu trả lời: ${ans}.`});
+      render(); toast('Đã gửi câu trả lời'); break; }
+    case 'perm-allow': case 'perm-deny': state.permPending=false; render(); toast(act==='perm-allow'?'Đã cho phép':'Đã từ chối'); break;
+    case 'resume': { const s = byId(d.id); confirmDlg('Tiếp tục session này?', `<p>Một task mới sẽ được thêm vào hàng đợi, gửi tiếp vào session của ${s.id}.</p><div class="field"><label for="resume-p">Prompt tiếp theo</label><textarea id="resume-p"></textarea></div>`, 'Thêm vào hàng đợi', () => {
+      TASKS.splice(TASKS.indexOf(queued().at(-1) || current())+1, 0, {id:nextId(),title:`Tiếp tục ${s.id}`,status:'queued',kind:'prompt',when:'',dur:''}); render(); toast('Đã thêm vào hàng đợi'); }); break; }
+    case 'toggle-hooks': {
+      const inst = state.hooksInstalled;
+      confirmDlg(inst?'Gỡ hook giám sát?':'Cài hook giám sát?', `<p>Thay đổi sẽ ghi vào <code>.claude/settings.local.json</code>:</p><div class="diff">${(inst?['del']:['add']).map(k => ['"hooks": {','  "PreToolUse": [{ "hooks": [{ "type": "command",','    "command": "ccgs-studio-hook" }] }],','  …8 event khác','}'].map(l => `<div class="${k}">${k==='add'?'+ ':'- '}${esc(l)}</div>`).join('')).join('')}</div>`, inst?'Gỡ hook':'Cài hook', () => { state.hooksInstalled=!inst; render(); toast(inst?'Đã gỡ hook':'Đã cài hook'); }); break; }
+    case 'edit-agent': confirmDlg('Sửa định nghĩa agent', '<p>Tính năng P2: mở editor, xem diff và xác nhận trước khi ghi file. Bản mẫu chưa có editor.</p>', 'Đóng', () => {}); break;
+    case 'run-wf': toast('Đã thêm workflow vào hàng đợi'); break;
+    case 'copy-tpl': toast('Đã sao chép nội dung'); break;
+    case 'check-proj': toast('Project hợp lệ'); break;
+    case 'switch-proj': confirmDlg('Chuyển project?', '<p>Chỉ chuyển được khi không có task đang chạy. Bản mẫu không chuyển thật.</p>', 'Đã hiểu', () => {}); break;
+    case 'save-prefs': toast('Đã lưu cài đặt'); break;
+    case 'doctor': {
+      const lis = document.querySelectorAll('#doctor li'); lis.forEach(li => { const m = li.querySelector('.mark'); m.className='mark pend'; m.textContent='·'; });
+      lis.forEach((li,i) => setTimeout(() => { const m = li.querySelector('.mark'); const ok = i!==3 || state.hooksInstalled; m.className='mark '+(ok?'ok':'bad'); m.textContent = ok?'✓':'✕'; if(!ok) li.querySelector('div').innerHTML += ' <span class="muted small">Chưa cài hook. <a href="#config">Cài hook</a></span>'; }, 350*(i+1)));
+      break; }
+  }
+});
+document.addEventListener('input', e => {
+  if (e.target.id === 'agent-q'){ state.agentQ = e.target.value; const pos = e.target.selectionStart; render(); const el=$('#agent-q'); el.focus(); el.setSelectionRange(pos,pos); }
+  if (e.target.id === 'log-q'){ state.logQ = e.target.value; const pos = e.target.selectionStart; render(); const el=$('#log-q'); el.focus(); el.setSelectionRange(pos,pos); }
+  if (e.target.id === 'skill-args'){ $('#skill-preview').textContent = `${state.skill} ${e.target.value}`.trim(); }
+  if (e.target.id === 'px'){ $('#px-url').disabled = !e.target.checked; }
+});
+document.addEventListener('change', e => {
+  if (e.target.id === 'sess'){ state.session = e.target.value; render(); }
+  if (e.target.id === 'log-src'){ state.logSrc = e.target.value; render(); }
+});
+$('#theme-btn').addEventListener('click', () => {
+  const r = document.documentElement; const dark = r.dataset.theme ? r.dataset.theme==='dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  r.dataset.theme = dark ? 'light' : 'dark';
+  try { localStorage.setItem('ccgs-theme', r.dataset.theme); } catch(_) {}
+});
+try { const th = localStorage.getItem('ccgs-theme'); if (th) document.documentElement.dataset.theme = th; } catch(_) {}
+render();
+</script>
+</body>
+</html>

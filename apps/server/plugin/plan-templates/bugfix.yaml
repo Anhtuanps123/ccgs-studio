@@ -1,0 +1,9 @@
+id: bugfix
+title: Sửa lỗi
+when: Sửa một hoặc vài lỗi cụ thể. Bước sửa là bước prompt (ghi rõ lý do).
+steps:
+  - skill: bug-report
+  - skill: code-review
+    optional: true
+  - skill: smoke-check
+    optional: true

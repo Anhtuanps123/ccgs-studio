@@ -1,0 +1,8 @@
+id: tuning
+title: Chỉnh số, cân bằng
+when: Đổi giá trị, tốc độ, phần thưởng, độ khó; không thêm cơ chế mới.
+steps:
+  - skill: quick-design
+  - skill: create-stories
+  - skill: balance-check
+    optional: true

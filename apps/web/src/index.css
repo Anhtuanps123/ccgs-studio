@@ -1,0 +1,4 @@
+@import "tailwindcss";
+@import "./prototype.css";
+#root{height:100%}
+.badge-err{color:var(--fail);font-size:12px}

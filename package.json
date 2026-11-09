@@ -1,0 +1,12 @@
+{
+  "name": "ccgs-studio",
+  "private": true,
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "build": "npm run build -w packages/shared && npm run build -w apps/server && npm run build -w apps/web",
+    "dev:server": "npm run dev -w apps/server",
+    "dev:web": "npm run dev -w apps/web",
+    "test": "npm test -w apps/server",
+    "start": "npm run build && npm start -w apps/server"
+  }
+}
