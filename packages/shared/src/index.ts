@@ -79,6 +79,8 @@ export interface StudioSettings {
   /** S-05: extra regexes (JS syntax, applied with the g flag) */ redactPatterns: string[];
   /** T-PJ-03 */ recentProjects: string[];
   /** S-06 */ phoenix: PhoenixSettings;
+  /** Tools Studio allows without asking ("Luôn cho phép"); '*' = every tool. AskUserQuestion is always asked. Claude Code deny rules still apply. */
+  autoAllow: string[];
 }
 
 // ---------- Phase 2: monitoring ----------
@@ -175,7 +177,7 @@ export interface PendingInteraction {
 /** POST /api/interactions/:id/answer. Multi-select answers are joined with ", ". */
 export interface QuestionAnswer { answers: Record<string, string> }
 /** POST /api/interactions/:id/decision */
-export interface PermissionDecision { decision: 'allow' | 'deny'; message?: string }
+export interface PermissionDecision { decision: 'allow' | 'deny'; message?: string; /** allow and remember the tool (Settings.autoAllow) */ always?: boolean }
 
 /** T-DB-03 */
 export interface CurrentTask { task: Task | null; activeAgents: AgentInvocation[]; queued: number; pending: number }
@@ -222,7 +224,7 @@ export interface PhoenixExport { ok: boolean; spans: number; status: number | nu
 
 /** auto: run every step without stopping; step: pause after each step until the user continues. */
 export type PipelineMode = 'auto' | 'step';
-export type PipelineStatus = 'planning' | 'review' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+export type PipelineStatus = 'planning' | 'critiquing' | 'review' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 export type PipelineStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'skipped';
 
 export interface PlanStep {
@@ -237,6 +239,21 @@ export interface PlanStep {
 }
 export interface PipelineStep extends PlanStep {
   id: string; status: PipelineStepStatus; taskId: string | null; warning: string | null; generated: boolean;
+  /** Checkpoint result after the step finished (P3, rules in apps/server/src/pipelines/checkpoint.ts). */
+  check?: StepCheck | null;
+  /** This step was added by a checkpoint to fix the step with this id (one automatic fix per step). */
+  fixOf?: string | null;
+}
+/** What the studio decided after a step, by rule: go on, insert fix steps, or stop for the user. */
+export interface StepCheck {
+  decision: 'continue' | 'fix' | 'pause';
+  /** Verdict word found in the step's reply (APPROVED, NEEDS REVISION, BLOCKED…), or null. */
+  verdict: string | null;
+  reason: string;
+  /** The result points away from the plan: suggest re-planning the remaining steps. */
+  replan: boolean;
+  /** Claude ended the step with a question to the user. */
+  question: string | null;
 }
 export interface Pipeline {
   id: string; request: string; summary: string | null; mode: PipelineMode; permissionMode: PermissionMode; model: string | null; rigor?: Rigor | null;
@@ -250,11 +267,40 @@ export interface Pipeline {
   issues?: PlanIssue[];
   /** The user changed the steps after planning (template errors become warnings). */
   edited?: boolean;
+  /** Critic loop (P2): a read-only reviewer (CCGS producer) checks each plan version; on errors the planner revises (max 2). */
+  critic?: boolean;
+  critiqueTaskId?: string | null;
+  critiques?: CritiqueRound[];
+  /** The checkpoint that paused the run (cleared when the run continues). */
+  checkpoint?: (StepCheck & { stepId: string }) | null;
+  /** Re-plans of the remaining steps so far; true while one is in progress (planning/critiquing). */
+  replans?: number;
+  replanning?: boolean;
+  /** Every planner task (first plan, revisions, re-plans), for cost. planTaskId is the latest. */
+  planTasks?: string[];
 }
 /** One finding of the plan check (apps/server/src/pipelines/plan-rules.ts). */
 export interface PlanIssue { level: 'error' | 'warn' | 'info'; rule: string; message: string; stepId: string | null }
+/** One finding of the critic (an LLM opinion: shown, never blocks the run). */
+export interface CriticIssue { level: 'error' | 'warn'; message: string; stepTitle: string | null }
+export interface CritiqueRound {
+  round: number;
+  /** Planner task whose plan this round reviewed. */
+  planTaskId: string | null;
+  taskId: string | null;
+  /** null while running or when the reply could not be read. */
+  ok: boolean | null;
+  issues: CriticIssue[];
+  error: string | null;
+  /** The planner was asked to revise the plan after this round. */
+  revised: boolean;
+  /** Who asked for the revision: the critic loop (errors) or the user ("Sửa theo phản biện", warnings too). */
+  revisedBy?: 'auto' | 'user';
+  /** Pipeline.replans when this round ran: the revision limit counts per (re)plan. */
+  epoch?: number;
+}
 export type Rigor = 'minimal' | 'standard' | 'full';
-export interface NewPipeline { request: string; mode?: PipelineMode; permissionMode?: PermissionMode; model?: string | null; rigor?: Rigor }
+export interface NewPipeline { request: string; mode?: PipelineMode; permissionMode?: PermissionMode; model?: string | null; rigor?: Rigor; critic?: boolean }
 /** What /start has recorded in project.yaml. `started` is false while modes.rigor is unset. */
 /** source: where "started" came from — project.yaml (modes.rigor) or a /start that finished in Studio without saving. */
 export interface PipelineSetup { started: boolean; rigor: Rigor | null; stage: string | null; automation: string | null; error: string | null; source?: 'project.yaml' | 'session' | null; startedAt?: string | null }

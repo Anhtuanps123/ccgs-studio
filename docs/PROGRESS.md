@@ -1,6 +1,6 @@
 # CCGS Studio: tiến độ và việc tiếp theo
 
-Cập nhật: 2026-11-09. Agent nhận việc: **đọc hết file này trước khi sửa code**, rồi đọc thêm `docs/brief.md` (§3 Nguyên tắc, §10 Quy tắc làm việc).
+Cập nhật: 2026-11-10. Agent nhận việc: **đọc hết file này trước khi sửa code**, rồi đọc thêm `docs/brief.md` (§3 Nguyên tắc, §10 Quy tắc làm việc).
 
 ## 1. Studio là gì (tóm tắt)
 
@@ -26,7 +26,7 @@ Project đang dùng thử: **Meodoku** (Unity 6000.0.81f1), ở máy công ty n�
 ```
 npm install
 npm run build          # shared -> server -> web
-npm test               # vitest ở apps/server, hiện 63/63 pass
+npm test               # vitest ở apps/server, hiện 76/76 pass
 npm start              # http://127.0.0.1:4310
 ```
 
@@ -48,6 +48,8 @@ npm start              # http://127.0.0.1:4310
 | Cổng /start + rigor | Đọc `project.yaml` (`modes.rigor`). Lộ trình CCGS theo rigor nằm trong prompt planner (`ROADMAP`) | `pipeline.service.ts` |
 | Quét game | Task chỉ đọc, dùng Unity MCP để liệt kê màn, popup, prefab. Bản tóm tắt được đưa vào prompt planner | `src/pipelines/game-scan.ts` |
 | Plugin `studio` | Skill `studio:unity-art-context`: đọc sprite, màu, font thật qua Unity MCP rồi ghi `design/art-context/<slug>.md` | `apps/server/plugin/`, `src/studio-plugin.ts` |
+| **Đầu não P2: vòng phản biện** | Sau mỗi bản kế hoạch, agent `producer` soát (chỉ đọc, session riêng). Có lỗi thì planner sửa trong session của nó, tối đa 2 lần. Ý kiến phản biện không chặn chạy | Mục 5 |
+| **Đầu não P3: điểm kiểm tra + lập lại kế hoạch** | Sau mỗi bước, luật code đọc verdict, file đổi và câu hỏi cuối để quyết định chạy tiếp, tự sửa 1 lần hoặc dừng. Người dùng có thể trả lời Claude, hoặc lập lại kế hoạch cho các bước còn lại | Mục 5 |
 | **Đầu não P1: chuẩn kế hoạch** | Có 6 mẫu kế hoạch. Server kiểm luật bằng code (thiếu bước, sai thứ tự, art trước UI, dev-story sau create-stories), tự sửa những chỗ an toàn, lỗi thì chặn "Duyệt và chạy". Người dùng sửa tay thì lỗi chỉ còn là cảnh báo | Mục 5 |
 
 ## 5. Đầu não (hướng chính đang làm)
@@ -66,7 +68,7 @@ npm start              # http://127.0.0.1:4310
 3. Phản biện kế hoạch. *(P2)*
 4. Server kiểm luật.
 5. Người dùng duyệt.
-6. Chạy, có điểm kiểm tra sau mỗi bước. *(P3)*
+6. Chạy, có điểm kiểm tra sau mỗi bước, lập lại kế hoạch khi lệch. *(P3)*
 
 ### P1: Xong (chưa chạy thử với Claude thật)
 
@@ -86,42 +88,94 @@ npm start              # http://127.0.0.1:4310
   - `test/pipelines.test.ts`: test cuối, kiểm tra luồng chặn rồi người dùng sửa tay.
 - **Giao diện:** component `PlanCheck` trong `Pipelines.tsx` hiện mẫu, slug, lỗi/cảnh báo/ghi chú và các bước bị bỏ.
 
-### P2: Việc tiếp theo, chưa làm
+### P2: Xong (chưa chạy thử với Claude thật)
 
-**Vòng phản biện:**
-- Sau khi planner xong (`planDone`), tạo thêm một task kiểu `prompt`, chỉ đọc (`permissionMode: 'plan'` hoặc `default`, cấm ghi). Task này dùng agent `producer` của CCGS để soát kế hoạch dưới dạng JSON, so với:
-  - `.claude/docs/workflow-catalog.yaml`,
-  - các file đã có trên đĩa,
-  - yêu cầu của người dùng.
-- Kết quả trả về: `{"ok": bool, "issues": [{"level", "message", "stepTitle"}]}`.
-- Nếu có lỗi: gửi lại planner (`resumeOf` session planner) kèm danh sách lỗi, **tối đa 2 vòng**, rồi mới chuyển sang `review`.
+**Luồng:** planner xong → server kiểm luật (P1) → task phản biện `critiquing` → nếu phản biện có lỗi `error` **hoặc** server còn lỗi, và số lần sửa < `MAX_REVISIONS` (2) → gửi lại planner (`resumeOf` session planner, trạng thái `planning`) → planner xong → phản biện vòng mới → … → `review`.
+- Tối đa 3 vòng phản biện, 2 lần sửa. Bản cuối vẫn được phản biện để người dùng xem ý kiến.
+- **Code:** `pipeline.service.ts`, gồm `criticPrompt`, `revisePrompt`, `parseCritique`, `startCritique`, `critiqueDone`, `toReview`, `skipCritique`.
+  - Task phản biện: kiểu `prompt`, session mới, `permissionMode: 'default'`, prompt cấm ghi và cấm hỏi. Nó giao việc cho subagent `producer` nếu có.
+  - Trả về JSON `{"ok", "issues":[{level, message, stepTitle}]}`.
+- **Kiểu (shared):**
+  - `PipelineStatus` thêm `'critiquing'`.
+  - `Pipeline` thêm `critic`, `critiqueTaskId`, `critiques: CritiqueRound[]`. Mỗi `CritiqueRound` có `round`, `planTaskId`, `taskId`, `ok`, `issues: CriticIssue[]`, `error`, `revised`.
+  - `NewPipeline.critic` mặc định `true`. Mặc định của server đặt qua `PipelineDeps.critic`.
+- **Ý kiến phản biện** lưu riêng trong `critiques`, **không** gộp vào `p.issues` và **không chặn** "Duyệt và chạy". Chỉ lỗi của server mới chặn.
+- **Khi lỗi:**
+  - Phản biện lỗi, không đọc được JSON, hoặc tạo task lỗi: chuyển sang `review`, lỗi ghi ở `round.error`.
+  - Planner sửa hỏng: giữ bản kế hoạch trước, chuyển sang `review`.
+- **Endpoint mới:** `POST /api/pipelines/:id/skip-critique`, huỷ task phản biện (hoặc task planner đang sửa) rồi chuyển sang `review`.
+- `cancel()` huỷ cả task phản biện. `recover()` xử lý cả trạng thái `critiquing`.
+- **Giao diện:**
+  - Ô "Phản biện kế hoạch" ở form tạo chuỗi.
+  - Component `Critique` hiện từng vòng.
+  - Nút "Bỏ qua phản biện".
+  - Chi phí tính gồm cả task phản biện và các lần planner sửa.
+- **Luôn cho phép (2026-11-10):** hộp xin quyền có thêm nút "Luôn cho phép <tool>". Studio lưu tên công cụ vào `autoAllow` trong `config.json`, cho phép luôn các hộp đang chờ của cùng công cụ, và từ đó `TaskQueue.ask` tự trả allow mà không hiện hộp nữa (có ghi log). Cài đặt > Quyền công cụ: xem/bỏ từng công cụ, hoặc tick "Tự cho phép mọi công cụ" (`'*'`). AskUserQuestion luôn hỏi. Chỉ áp cho những lần Claude Code đã định hỏi (`canUseTool`), nên luật deny và hook của project vẫn chặn trước.
+- **Phản biện rẻ hơn (2026-11-10):** đo thực tế mỗi vòng phản biện khoảng $1.0–1.1 (Opus, 28–38 tool call), đắt hơn bước lập kế hoạch ($0.71). Nguyên nhân: session chính giao cho subagent `producer`, nên system prompt bị nạp 2 lần, kế hoạch bị gửi 2 lần, và session chính chỉ chép lại kết quả. Producer thì đọc nguyên SKILL.md và workflow-catalog. Sửa: `criticPrompt` tự soát theo góc nhìn producer, cấm Agent, chỉ Grep/Read từng đoạn (khoảng 10 tool call). Runner nhận `compactAfter(task)` và bỏ /compact cho task phản biện (`isCriticPrompt`), vì session đó không bao giờ được resume. Chưa đo lại với Claude thật.
+- **Sửa theo phản biện (2026-11-10):** vòng tự động chỉ sửa khi có lỗi, nên cảnh báo trước đây phải sửa tay. Thêm `POST /api/pipelines/:id/revise` (`revise()`), dùng khi chuỗi đang `review` và chưa chạy bước nào. Gửi về session planner:
+  - mọi ý kiến của vòng phản biện cuối, gồm cả cảnh báo;
+  - cảnh báo của studio;
+  - kế hoạch hiện tại, có cả phần người dùng sửa tay;
+  - ghi chú của người dùng.
 
-**Gợi ý thiết kế:**
-- Thêm trạng thái `PipelineStatus` = `'critiquing'`, hoặc trường `p.round`.
-- Lưu `critiqueTaskId`.
-- Gộp issue của phản biện vào `p.issues` với `rule: 'critic'`, mức `warn`. Phản biện là ý kiến của LLM, không chặn chạy; chỉ server mới chặn.
-- Cập nhật `onTaskEnded` để nhận ra task phản biện, và `recover()` để xử lý khi server khởi động lại.
+  Sau đó kế hoạch được phản biện lại. Việc cần người dùng quyết mà ghi chú chưa có thì planner ghi "CẦN QUYẾT: …" vào `why` của bước đó. Round được đánh `revisedBy: 'user'` và không tính vào `MAX_REVISIONS`. Giao diện có ô ghi chú và nút "Sửa theo phản biện" dưới phần phản biện.
+- **Test:** 5 test trong `test/pipelines.test.ts`, mục `pipeline critic loop (P2)`. Các test cũ truyền `critic: false`.
+- **Chưa thử thật:** chưa biết `producer` có trả đúng JSON không, và mất bao nhiêu token mỗi vòng (Unknown).
 
-**Giao diện:** hiện số vòng và ý kiến phản biện.
+### P3: Xong (chưa chạy thử với Claude thật)
 
-**Test:** thêm vào `test/pipelines.test.ts` với `fakeRunner`, theo mẫu test sẵn có.
+**Điểm kiểm tra sau mỗi bước.** Luật viết bằng code, không có LLM, nằm ở `src/pipelines/checkpoint.ts`:
+- `verdictOf` lấy verdict từ dòng `Verdict:` hoặc `Recommendation:` cuối cùng, hoặc từ dòng `Story: <path> — Implemented|INCOMPLETE|BLOCKED` của `/dev-story`.
+- `checkStep` quyết định `continue`, `fix` hoặc `pause`. Thứ tự luật:
+  1. **Verdict xấu, sửa được, tự sửa 1 lần** (nếu `step.fixOf` đã có thì không tự sửa nữa):
+     - Một skill review (`ux-review`, `design-review`, `code-review`, `story-readiness`, `architecture-review`) báo `NEEDS REVISION`, `CHANGES REQUIRED` hoặc `NEEDS WORK`: chèn một prompt "sửa theo review", rồi chạy lại review.
+     - `/dev-story` báo `INCOMPLETE`: chạy lại.
+     - `/story-done` báo `BLOCKED`: chèn `/dev-story` rồi `/story-done`.
+     - Sửa rồi vẫn xấu: dừng, gợi ý lập lại kế hoạch.
+  2. **Verdict lệch kế hoạch** (`MAJOR REVISION NEEDED`, `BLOCKED`, `REDIRECTED`, `PIVOT`, `KILL`, `FAIL`): dừng, `replan: true`.
+  3. **Verdict cần người xem** (`NOT ASSESSED`, `CONCERNS`): dừng.
+  4. **File output theo mẫu** (slot có `output`, không `repeat`) **không có trên đĩa:** dừng.
+  5. **Verdict tốt:** chạy tiếp.
+  6. **Không có verdict, Claude kết thúc bằng câu hỏi:** dừng, ghi câu hỏi vào `check.question`.
+  7. **Skill ghi file** (`WRITERS`) mà không đổi file nào: dừng. Bỏ qua luật này khi permissionMode là `plan` hoặc khi `changedFiles` là null.
+- **Nơi lưu kết quả:**
+  - Kết quả của từng bước nằm ở `step.check`.
+  - Khi chuỗi phải dừng, kết quả cũng được ghi vào `p.checkpoint`, và `start()` xoá nó đi.
+  - Bước được chèn tự động có `fixOf`. `updateSteps` giữ lại `fixOf`.
+- **Trả lời:** `POST /api/pipelines/:id/answer {text}` chèn một prompt step "Trả lời Claude" trước bước chờ đầu tiên rồi chạy tiếp, trong cùng session.
 
-### P3: Sau P2
+**Lập lại kế hoạch:** `POST /api/pipelines/:id/replan {note?}`, do người dùng bấm, không tự chạy.
+- Tạo task planner `resumeOf` session làm việc (session này biết mọi chuyện đã xảy ra), dùng `replanPrompt` với: bước đã chạy kèm verdict, lý do dừng, ghi chú của người dùng, các bước còn chờ.
+- Planner chỉ trả về các bước còn phải chạy.
+- `planDone` luôn giữ các bước không ở trạng thái `pending`, chỉ thay phần còn chờ. Nếu lỗi thì giữ kế hoạch cũ. Sau đó vẫn đi qua kiểm luật P1 và phản biện P2.
+- Giới hạn số lần sửa theo phản biện tính riêng cho mỗi lần lập lại, qua `CritiqueRound.epoch` = `p.replans`.
+- `p.replanning` bằng `true` cho đến lúc `toReview`. `p.planTasks` lưu mọi task planner để tính chi phí.
 
-**Điểm kiểm tra sau mỗi bước.** Trong `stepDone`, đọc `t.resultText` và `changedFiles`, rồi quyết định:
-- chạy tiếp,
-- chèn bước sửa (ví dụ `/story-done` báo chưa đạt),
-- hoặc dừng lại hỏi người dùng.
+**Giao diện:**
+- Hộp "Điểm kiểm tra" hiện verdict, lý do và ô trả lời câu hỏi.
+- Mục "Lập lại kế hoạch" có ô ghi chú.
+- Mỗi bước hiện kết quả điểm kiểm tra, và tag "điểm kiểm tra thêm" cho bước được chèn tự động.
 
-Tất cả quyết định này cần luật rõ, đừng để LLM tự quyết hoàn toàn.
+**Test:**
+- `test/checkpoint.test.ts`: 5 test.
+- `test/pipelines.test.ts`, mục `pipeline checkpoints and re-plan (P3)`: 3 test.
+- Test chạy đủ chuỗi cũ nay giả lập file thay đổi cho `/quick-design` và `/dev-story`, vì luật 7.
 
-**Lập kế hoạch lại** khi kết quả lệch (ví dụ story bị chặn): gọi planner với tình hình mới, chỉ thay các bước `pending`.
+**Chưa biết khi chạy thật:**
+- Cách Claude trình bày verdict ngoài thực tế có khớp regex không.
+- Skill CCGS hay hỏi "May I write…?" bằng chữ thường; khi đó chuỗi sẽ dừng ở luật 6, chạy tiếp được hay không thì phải thử mới biết.
+- Có thể cần thêm token hoặc skill vào `WRITERS` / `REVIEWS`.
+
+### Hướng tiếp theo (gợi ý, chưa làm)
+
+- Chạy thử thật P1, P2 và P3 với kế hoạch piggy-bank, rồi chỉnh luật theo log thật.
+- Có thể cho phép tự lập lại kế hoạch (không cần bấm) ở chế độ "Tự chạy hết", có giới hạn số lần. Hiện tại cố ý để người dùng bấm, theo nguyên tắc "user-driven" của CCGS.
 
 ## 6. Việc còn treo và chờ người dùng quyết
 
 1. **T-AG-05 (sửa agent):** chưa làm, vì tính năng này ghi vào `.claude/agents/`, trái nguyên tắc số 2. Người dùng chọn (a) ngoại lệ có diff và xác nhận, hoặc (b) bỏ. **Chưa có câu trả lời.**
-2. `docs/api-contract.md` **chưa có** endpoint `/api/pipelines/*` và `/api/scan/*` cùng kiểu `Pipeline` / `PlanIssue`. Cần bổ sung (brief §10: hợp đồng cập nhật trước, code sau).
-3. Plugin `studio`, Unity MCP trong task và P1 **chưa chạy thử với Claude thật**. Phải restart server để nạp plugin và mẫu mới.
+2. `docs/api-contract.md` **chưa có** endpoint `/api/pipelines/*` (gồm `skip-critique`, `replan`, `answer`) và `/api/scan/*`, cùng kiểu `Pipeline` / `PlanIssue` / `CritiqueRound` / `StepCheck`. Cần bổ sung (brief §10: hợp đồng cập nhật trước, code sau).
+3. Plugin `studio`, Unity MCP trong task, P1, P2 và P3 **chưa chạy thử với Claude thật**. Phải restart server để nạp plugin và mẫu mới.
 4. **Meodoku:**
    - `project.yaml` và `CLAUDE.md` vẫn ghi Godot, trong khi game là Unity. Một task `/setup-engine` đã được tạo trên máy công ty, chưa rõ kết quả (Unknown).
    - Kế hoạch piggy-bank cũ được tạo trước P1, nên chưa có bước art-context. Nên lập kế hoạch mới.
@@ -151,5 +205,5 @@ packages/shared/src/index.ts      kiểu dùng chung (Pipeline, PlanIssue, ...)
 
 ## 8. Git
 
-- Repo chưa có commit nào lúc viết file này. `.gitignore` bỏ qua `node_modules/`, `spikes/captures/`, `dist/`.
+- Đã push lên `origin/main` (https://github.com/Anhtuanps123/ccgs-studio). Commit đầu: `b7b474a` (phase 0–5, pipelines, P1). P2 và P3 chưa commit. `.gitignore` bỏ qua `node_modules/`, `spikes/captures/`, `dist/`.
 - `apps/server/test/monitor.test.ts` có chuỗi giống token (`sk-ant-…`, `ghp_…`). Đây là **dữ liệu giả để test redactor**, không phải bí mật thật. Nếu GitHub push protection chặn, xác nhận là false positive.

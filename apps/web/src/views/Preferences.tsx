@@ -53,6 +53,17 @@ export function Preferences({ onChanged }: { onChanged: () => void }) {
               <div><b>/compact sau khi task xong</b><div className="small muted">Task thành công thì gửi /compact vào session đó, để bước sau (resume) không mang cả context cũ. Task lỗi hoặc bị dừng thì không compact.</div></div></label>
           </div></div>
 
+          <div className="panel"><div className="panel-h"><h3>Quyền công cụ</h3></div><div className="panel-b">
+            <label className="opt" style={{ marginBottom: 10 }}><input type="checkbox" checked={(f.autoAllow ?? []).includes('*')}
+              onChange={e => set(s => ({ ...s, autoAllow: e.target.checked ? [...(s.autoAllow ?? []).filter(x => x !== '*'), '*'] : (s.autoAllow ?? []).filter(x => x !== '*') }))} />
+              <div><b>Tự cho phép mọi công cụ</b><div className="small muted">Studio không hiện hộp xin quyền nữa. Luật deny và hook của project vẫn chặn như cũ; câu hỏi (AskUserQuestion) vẫn hỏi.</div></div></label>
+            <div className="field"><label>Công cụ đã chọn "Luôn cho phép"</label>
+              {(f.autoAllow ?? []).filter(x => x !== '*').length === 0 ? <span className="hint">Chưa có. Bấm "Luôn cho phép" trong hộp xin quyền để thêm.</span> :
+                <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>{(f.autoAllow ?? []).filter(x => x !== '*').map(t => (
+                  <span key={t} className="tag">{t} <button className="btn sm" aria-label={`Bỏ ${t}`} onClick={() => set(s => ({ ...s, autoAllow: s.autoAllow.filter(x => x !== t) }))}>×</button></span>))}</div>}
+              <span className="hint">Bỏ một công cụ rồi bấm Lưu để Studio hỏi lại.</span></div>
+          </div></div>
+
           <div className="panel"><div className="panel-h"><h3>Phoenix (S-06)</h3></div><div className="panel-b">
             <label className="opt" style={{ marginBottom: 10 }}><input type="checkbox" checked={f.phoenix.enabled} onChange={e => set(s => ({ ...s, phoenix: { ...s.phoenix, enabled: e.target.checked } }))} />
               <div><b>Tự gửi trace khi task kết thúc</b><div className="small muted">Mặc định tắt. Session chạy ngoài Studio gửi tay ở trang Hiệu suất.</div></div></label>

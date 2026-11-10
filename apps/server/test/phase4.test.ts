@@ -183,6 +183,8 @@ describe('S-03 / S-04 / S-05 settings', () => {
     expect(() => mergeSettings(d, { taskDefaults: { permissionMode: 'bypassPermissions' } })).toThrow();
     expect(() => mergeSettings(d, { retention: { maxPayloadKB: 0 } })).toThrow();
     expect(() => mergeSettings(d, { phoenix: { endpoint: 'file:///x' } })).toThrow();
+    expect(mergeSettings(d, { autoAllow: ['Bash', ' Bash ', 'mcp__UnityMCP__read_console', '*'] }).autoAllow).toEqual(['Bash', 'mcp__UnityMCP__read_console', '*']);
+    expect(() => mergeSettings(d, { autoAllow: ['Bash(rm -rf)'] })).toThrow(/công cụ/);
   });
   it('applies user redaction patterns and the payload cap', () => {
     configureRedaction({ patterns: ['MY-[0-9]{4}'], maxPayloadKB: 1 });

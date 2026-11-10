@@ -22,7 +22,7 @@ import { baseRef, takeSnapshot, taskDiffs } from './tasks/git-snapshot';
 import { summarizeInput } from './monitor/projector';
 import { configureRedaction } from './monitor/redact';
 import { InsightsController, PhoenixExporter } from './insights/insights.controller';
-import { PipelineService } from './pipelines/pipeline.service';
+import { isCriticPrompt, PipelineService } from './pipelines/pipeline.service';
 import { GameScanService } from './pipelines/game-scan';
 import { ScanController } from './pipelines/scan.controller';
 import { PipelinesController } from './pipelines/pipelines.controller';
@@ -47,7 +47,11 @@ const PORT = Number(process.env.PORT ?? 4310);
         return new TaskQueue({
           db: m.db, project, snapshot: takeSnapshot, baseRef, diffs: taskDiffs,
           defaults: () => s.get().taskDefaults, sessionExists: id => !!m.getSession(id),
-          runner: sdkRunner({ cwd: () => project() ?? process.cwd(), settingsFile: h.studioSettingsFile(), summarize: (t, i) => summarizeInput(t, i, project()), compactAfter: () => s.get().taskDefaults.compactAfter !== false }),
+          autoAllow: {
+            has: tool => tool !== 'AskUserQuestion' && (s.get().autoAllow ?? []).some(x => x === '*' || x === tool),
+            add: tool => { const cur = s.get().autoAllow ?? []; if (!cur.includes(tool)) s.update({ autoAllow: [...cur, tool] }); },
+          },
+          runner: sdkRunner({ cwd: () => project() ?? process.cwd(), settingsFile: h.studioSettingsFile(), summarize: (t, i) => summarizeInput(t, i, project()), compactAfter: t => s.get().taskDefaults.compactAfter !== false && !isCriticPrompt(t.prompt) }),
         });
       },
     },

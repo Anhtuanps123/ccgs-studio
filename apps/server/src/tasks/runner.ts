@@ -29,7 +29,7 @@ export interface SdkRunnerConfig {
   settingsFile: string;
   summarize: (tool: string, input: unknown) => string;
   /** Compact the session after a successful task (Cài đặt > compactAfter). */
-  compactAfter?: () => boolean;
+  compactAfter?: (task: Task) => boolean;
 }
 
 // The server is CommonJS and the SDK is ESM-only: keep a real import() through tsc.
@@ -104,7 +104,7 @@ export function sdkRunner(cfg: SdkRunnerConfig): Runner {
           }
         }
         // Keep the result of the task itself; a failed compact only logs.
-        if (ok && sessionId && cfg.compactAfter?.() && !abort.signal.aborted) {
+        if (ok && sessionId && cfg.compactAfter?.(task) && !abort.signal.aborted) {
           hooks.log('info', 'Task xong, đang /compact session để giảm context…');
           try {
             q = query({ prompt: '/compact', options: { ...options, resume: sessionId } });

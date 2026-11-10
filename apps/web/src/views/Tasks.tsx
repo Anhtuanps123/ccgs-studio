@@ -85,9 +85,9 @@ export function PermissionBox({ it, onDone }: { it: PendingInteraction; onDone: 
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const decide = async (decision: 'allow' | 'deny') => {
+  const decide = async (decision: 'allow' | 'deny', always = false) => {
     setBusy(true); setErr(null);
-    try { await api(`/api/interactions/${it.id}/decision`, { method: 'POST', body: JSON.stringify({ decision, message: msg || undefined }) }); onDone(); }
+    try { await api(`/api/interactions/${it.id}/decision`, { method: 'POST', body: JSON.stringify({ decision, message: msg || undefined, ...(always ? { always: true } : {}) }) }); onDone(); }
     catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   return (
@@ -99,6 +99,7 @@ export function PermissionBox({ it, onDone }: { it: PendingInteraction; onDone: 
       <input type="text" placeholder="Lời nhắn cho Claude khi từ chối (tuỳ chọn)" value={msg} onChange={e => setMsg(e.target.value)} />
       <div className="row">
         <button className="btn primary" onClick={() => decide('allow')} disabled={busy}>Cho phép</button>
+        <button className="btn" onClick={() => decide('allow', true)} disabled={busy} title={`Ghi nhớ trong Cài đặt > Quyền công cụ: từ giờ ${p.toolName} chạy luôn, không hỏi lại`}>Luôn cho phép {p.toolName}</button>
         <button className="btn" onClick={() => decide('deny')} disabled={busy}>Từ chối</button>
         {err && <span className="badge-err">{err}</span>}
       </div>

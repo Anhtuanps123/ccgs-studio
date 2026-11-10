@@ -21,6 +21,8 @@ export interface QueueDeps {
   diffs?: (cwd: string, base: string | null, files: ChangedFile[], before: Snapshot | null) => Promise<TaskDiff[]>;
   /** T-TC-07: whether a session id exists (to resume). */
   sessionExists?: (id: string) => boolean;
+  /** Tools allowed without asking (Settings.autoAllow, '*' = all) and how to remember one more. */
+  autoAllow?: { has(tool: string): boolean; add(tool: string): void };
 }
 
 const SKILL_RE = /^[a-z0-9][a-z0-9._-]*(:[a-z0-9][a-z0-9._-]*)?$/i; // plugin skills: plugin:skill
@@ -204,6 +206,18 @@ export class TaskQueue {
       if (d !== 'allow' && d !== 'deny') throw new BadTask('decision phải là allow hoặc deny');
       this.pending.delete(interactionId);
       p.resolve({ decision: d, message: (reply as PermissionDecision).message });
+      const tool = p.it.permission?.toolName;
+      if (d === 'allow' && (reply as PermissionDecision).always && tool && this.d.autoAllow) {
+        this.d.autoAllow.add(tool);
+        this.bus.emit('log', 'info', `Từ giờ tự cho phép ${tool} (Cài đặt > Quyền).`, null);
+        // Other prompts for the same tool that are already waiting.
+        for (const [id, o] of [...this.pending]) if (o.it.kind === 'permission' && o.it.permission?.toolName === tool) {
+          this.pending.delete(id);
+          o.resolve({ decision: 'allow' });
+          this.bus.emit('resolved', { id });
+          if (o.it.taskId !== p.it.taskId) this.syncWaiting(o.it.taskId);
+        }
+      }
     }
     this.bus.emit('resolved', { id: interactionId });
     this.syncWaiting(p.it.taskId);
@@ -249,6 +263,10 @@ export class TaskQueue {
       log: (lvl, msg) => this.bus.emit('log', lvl, msg, this.get(id)?.sessionId ?? null),
       ask: (req, signal) => new Promise((resolve, reject) => {
         if (this.current?.stopping) return reject(new Error('Task bị dừng'));
+        if (req.kind === 'permission' && req.permission && this.d.autoAllow?.has(req.permission.toolName)) {
+          this.bus.emit('log', 'info', `Tự cho phép ${req.permission.toolName}: ${req.permission.inputSummary.slice(0, 160)}`, this.get(id)?.sessionId ?? null);
+          return resolve({ decision: 'allow' });
+        }
         const it: PendingInteraction = { ...req, id: randomUUID(), taskId: id, createdAt: new Date().toISOString() };
         this.pending.set(it.id, { it, resolve, reject });
         signal?.addEventListener('abort', () => { this.drop(it.id, new Error('Claude huỷ yêu cầu')); this.syncWaiting(id); }, { once: true });

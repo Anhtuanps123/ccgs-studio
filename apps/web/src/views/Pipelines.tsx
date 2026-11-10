@@ -1,7 +1,7 @@
 // Feature pipelines: one request -> plan -> approve -> chained tasks in one session.
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import type { PermissionMode, Pipeline, PipelineMode, PipelineSetup, PipelineStep, PlanIssue, Rigor, SessionUsage, Skill, StudioSettings } from '@ccgs/shared';
+import type { CritiqueRound, PermissionMode, Pipeline, PipelineMode, PipelineSetup, PipelineStep, PlanIssue, Rigor, SessionUsage, Skill, StudioSettings } from '@ccgs/shared';
 import { api, live, useApi } from '../api';
 import { Status, when } from '../monitor';
 import { fmtNum, fmtUsd, totalTok } from '../insights';
@@ -17,8 +17,8 @@ const RIGORS: [Rigor, string, string][] = [
   ['full', 'full', 'Như standard, thêm design-review, ux-review, architecture-review, vertical slice.'],
 ];
 const PERMS: [PermissionMode, string][] = [['default', 'Hỏi trước khi sửa file'], ['acceptEdits', 'Tự sửa file (xem diff sau)'], ['plan', 'Chỉ lập kế hoạch, không sửa']];
-const PSTATUS: Record<string, string> = { planning: 'running', review: 'waiting', running: 'running', paused: 'waiting', completed: 'completed', failed: 'failed', cancelled: 'cancelled' };
-const PLABEL: Record<string, string> = { planning: 'Đang lập kế hoạch', review: 'Chờ duyệt', running: 'Đang chạy', paused: 'Tạm dừng', completed: 'Xong', failed: 'Lỗi', cancelled: 'Đã huỷ' };
+const PSTATUS: Record<string, string> = { planning: 'running', critiquing: 'running', review: 'waiting', running: 'running', paused: 'waiting', completed: 'completed', failed: 'failed', cancelled: 'cancelled' };
+const PLABEL: Record<string, string> = { planning: 'Đang lập kế hoạch', critiquing: 'Đang phản biện', review: 'Chờ duyệt', running: 'Đang chạy', paused: 'Tạm dừng', completed: 'Xong', failed: 'Lỗi', cancelled: 'Đã huỷ' };
 const SLABEL: Record<string, string> = { pending: 'Chờ', running: 'Đang chạy', completed: 'Xong', failed: 'Lỗi', cancelled: 'Đã huỷ', skipped: 'Bỏ qua' };
 const PBadge = ({ s }: { s: string }) => <span className="status" data-s={PSTATUS[s] ?? s}>{PLABEL[s] ?? s}</span>;
 const SBadge = ({ s }: { s: string }) => <span className="status" data-s={s === 'pending' || s === 'skipped' ? 'unknown' : s}>{SLABEL[s] ?? s}</span>;
@@ -42,6 +42,7 @@ function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
   const [mode, setMode] = useState<PipelineMode>('auto');
   const [perm, setPerm] = useState<PermissionMode>('default');
   const [model, setModel] = useState('');
+  const [critic, setCritic] = useState(true);
   const setup = useApi<PipelineSetup>('/api/pipelines/setup');
   const [rigor, setRigor] = useState<Rigor>('minimal');
   useEffect(() => { if (setup.data?.rigor) setRigor(setup.data.rigor); }, [setup.data]);
@@ -52,7 +53,7 @@ function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      const p = await api<Pipeline>('/api/pipelines', { method: 'POST', body: JSON.stringify({ request, mode, permissionMode: perm, model: model || null, rigor }) });
+      const p = await api<Pipeline>('/api/pipelines', { method: 'POST', body: JSON.stringify({ request, mode, permissionMode: perm, model: model || null, rigor, critic }) });
       setRequest(''); onCreated(p.id);
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
@@ -84,6 +85,7 @@ function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
           <select id="pl-model" value={model} onChange={e => setModel(e.target.value)}>
             <option value="">Theo cài đặt</option><option value="opus">opus</option><option value="sonnet">sonnet</option><option value="haiku">haiku</option></select></div>
       </div>
+      <label className="opt" style={{ marginBottom: 8 }}><input type="checkbox" checked={critic} onChange={e => setCritic(e.target.checked)} /><div><b>Phản biện kế hoạch</b><div className="small muted">Soát kế hoạch theo góc nhìn producer (chỉ đọc). Nếu thấy lỗi, planner sửa lại, tối đa 2 lần. Tốn thêm token.</div></div></label>
       <p className="small muted" style={{ marginTop: 0 }}>Bước đầu Claude chỉ đọc project để lập kế hoạch, không sửa file. Bạn xem và sửa kế hoạch trước khi chạy.</p>
       <div className="row"><button className="btn primary" disabled={busy || !request.trim() || !started} onClick={submit}>Lập kế hoạch</button>{err && <span className="badge-err">{err}</span>}</div>
     </div></div>
@@ -126,14 +128,24 @@ function Detail({ p }: { p: Pipeline }) {
   const [busy, setBusy] = useState(false);
   const editable = ['review', 'paused', 'failed'].includes(p.status) && p.steps.length > 0;
   const pending = p.steps.filter(s => s.status === 'pending');
+  const revising = p.status === 'planning' && p.steps.length > 0;
+  const ran = p.steps.some(s => s.status !== 'pending');
+  const stopped = ['review', 'paused', 'failed'].includes(p.status);
+  const [answer, setAnswer] = useState('');
+  const [note, setNote] = useState('');
+  const [fixNote, setFixNote] = useState('');
+  const lastCrit = p.critiques?.[p.critiques.length - 1];
+  const opinions = (lastCrit && !lastCrit.error ? lastCrit.issues.length : 0) + (p.issues ?? []).filter(i => i.level !== 'info').length;
+  const canRevise = p.status === 'review' && !ran && !!p.sessionId && pending.length > 0;
   useEffect(() => { setDrafts(null); setMode(p.mode); setPerm(p.permissionMode); }, [p.id, p.status, p.mode, p.permissionMode]);
   const { reload: reloadUsage } = usage;
   useEffect(() => { reloadUsage(); }, [p.steps.map(s => s.status).join(), reloadUsage]);
 
-  const runningTask = p.status === 'planning' ? p.planTaskId : p.steps.find(s => s.status === 'running')?.taskId ?? null;
+  const runningTask = p.status === 'planning' ? p.planTaskId : p.status === 'critiquing' ? p.critiqueTaskId ?? null : p.steps.find(s => s.status === 'running')?.taskId ?? null;
   const asks = (inter.data ?? []).filter(i => i.taskId === runningTask);
   const taskOf = (id: string | null) => (id ? (tasks.data ?? []).find(t => t.id === id) : undefined);
-  const cost = p.steps.concat().map(s => taskOf(s.taskId)?.costUsd).concat(taskOf(p.planTaskId)?.costUsd)
+  const extra = [...new Set([p.planTaskId, ...(p.planTasks ?? []), ...(p.critiques ?? []).flatMap(c => [c.planTaskId, c.taskId])])];
+  const cost = p.steps.map(s => taskOf(s.taskId)?.costUsd).concat(extra.map(id => taskOf(id)?.costUsd))
     .filter((x): x is number => typeof x === 'number');
   const refresh = () => { tasks.reload(); inter.reload(); };
 
@@ -147,6 +159,10 @@ function Detail({ p }: { p: Pipeline }) {
   const setAt = (i: number, d: Draft) => setDrafts(editing.map((x, k) => (k === i ? d : x)));
   const move = (i: number, j: number) => { const xs = editing.slice(); [xs[i], xs[j]] = [xs[j], xs[i]]; setDrafts(xs); };
   const save = () => call('/steps', { steps: editing, mode, permissionMode: perm }, 'PUT');
+  const revise = async () => {
+    if (dirty) await call('/steps', { steps: editing, mode, permissionMode: perm }, 'PUT');
+    await call('/revise', { note: fixNote.trim() || null }); setFixNote('');
+  };
   const startNow = async () => { if (dirty) await call('/steps', { steps: editing, mode, permissionMode: perm }, 'PUT'); await call('/start'); };
   const studio = useApi<{ name: string; description: string; argumentHint: string | null }[]>('/api/pipelines/studio-skills');
   const allSkills = [...(studio.data ?? []), ...(skills.data ?? []).filter(s => s.hasSkillMd && s.userInvocable !== false)] as Pick<Skill, 'name' | 'argumentHint'>[];
@@ -162,8 +178,26 @@ function Detail({ p }: { p: Pipeline }) {
           {p.error && <div className="badge-err">{p.error}</div>}
           {err && <div className="badge-err">{err}</div>}
           <PlanCheck p={p} />
+          <Critique p={p} />
+          {canRevise && <details open={opinions > 0}><summary className="small">Sửa theo phản biện{opinions ? ` (${opinions} ý kiến)` : ''}</summary>
+            <div className="row" style={{ marginTop: 6 }}><input type="text" value={fixNote} onChange={e => setFixNote(e.target.value)} placeholder='Quyết định của bạn, vd: "Rigor giữ minimal. Nút dùng chữ Claim."' aria-label="Ghi chú sửa theo phản biện" style={{ flex: 1, minWidth: 160 }} />
+              <button className="btn sm" disabled={busy || (!opinions && !fixNote.trim())} onClick={revise}>Sửa theo phản biện</button></div>
+            <div className="small muted">Planner (cùng session đã lập kế hoạch) sửa theo mọi lỗi và cảnh báo ở trên, cộng ghi chú của bạn, giữ các bước bạn đã sửa tay; rồi phản biện lại. Việc cần bạn quyết mà ghi chú chưa có sẽ hiện "CẦN QUYẾT" ở bước đó.</div></details>}
           {asks.map(it => it.kind === 'question' ? <QuestionBox key={it.id} it={it} onDone={refresh} /> : <PermissionBox key={it.id} it={it} onDone={refresh} />)}
-          {p.status === 'planning' && !asks.length && <div className="muted">Claude đang đọc project để lập kế hoạch… <Link to="/tasks">xem ở Task Center</Link></div>}
+          {p.status === 'planning' && !asks.length && <div className="muted">{p.replanning ? 'Claude đang lập lại kế hoạch cho các bước còn lại…' : revising ? 'Planner đang sửa kế hoạch theo phản biện…' : 'Claude đang đọc project để lập kế hoạch…'} <Link to="/tasks">xem ở Task Center</Link></div>}
+          {p.checkpoint && stopped && <div className="stack" style={{ gap: 6, border: '1px solid var(--line)', borderRadius: 6, padding: 10 }}>
+            <div className="small"><b>Điểm kiểm tra</b>{p.checkpoint.verdict && <span className="tag" style={{ marginLeft: 6 }}>{p.checkpoint.verdict}</span>} {p.checkpoint.reason}</div>
+            {p.checkpoint.question && <>
+              <div className="small">Claude hỏi: <i>{p.checkpoint.question}</i></div>
+              <div className="row"><input type="text" value={answer} onChange={e => setAnswer(e.target.value)} placeholder="Câu trả lời của bạn" aria-label="Trả lời Claude" style={{ flex: 1, minWidth: 160 }} />
+                <button className="btn sm primary" disabled={busy || !answer.trim()} onClick={async () => { await call('/answer', { text: answer }); setAnswer(''); }}>Trả lời và chạy tiếp</button></div></>}
+            {p.checkpoint.replan && <div className="small muted">Kết quả lệch kế hoạch: nên lập lại kế hoạch cho các bước còn lại.</div>}
+          </div>}
+          {stopped && ran && <details open={!!p.checkpoint?.replan}><summary className="small">Lập lại kế hoạch cho các bước còn lại</summary>
+            <div className="row" style={{ marginTop: 6 }}><input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Ghi chú cho Claude (không bắt buộc)" aria-label="Ghi chú lập lại kế hoạch" style={{ flex: 1, minWidth: 160 }} />
+              <button className="btn sm" disabled={busy} onClick={async () => { await call('/replan', { note: note.trim() || null }); setNote(''); }}>Lập lại kế hoạch</button></div>
+            <div className="small muted">Các bước đã chạy giữ nguyên; Claude (trong session đang làm) chỉ thay các bước còn chờ, rồi kiểm luật và phản biện lại.</div></details>}
+          {p.status === 'critiquing' && !asks.length && <div className="muted">Đang soát kế hoạch (vòng {p.critiques?.length ?? 1})… <Link to="/tasks">xem ở Task Center</Link></div>}
           <div className="row small muted">
             {p.sessionId && <><Link to={`/live?s=${p.sessionId}`}>Session</Link><Link to={`/timeline?s=${p.sessionId}`}>Timeline</Link><Link to={`/agent-monitor?s=${p.sessionId}`}>Agent</Link></>}
             <span>Token: {usage.data ? fmtNum(totalTok(usage.data.total)) : 'Unknown'}</span>
@@ -173,6 +207,7 @@ function Detail({ p }: { p: Pipeline }) {
             {['review', 'paused', 'failed'].includes(p.status) && pending.length > 0 &&
               <button className="btn primary" disabled={busy} onClick={startNow}>{p.status === 'review' ? 'Duyệt và chạy' : 'Tiếp tục'}</button>}
             {editable && dirty && <button className="btn" disabled={busy} onClick={save}>Lưu kế hoạch</button>}
+            {(p.status === 'critiquing' || revising) && <button className="btn" disabled={busy} onClick={() => call('/skip-critique')}>{revising ? 'Dừng, giữ kế hoạch cũ' : 'Bỏ qua phản biện'}</button>}
             {!['completed', 'cancelled'].includes(p.status) && <button className="btn danger" disabled={busy} onClick={() => call('/cancel')}>Huỷ chuỗi</button>}
           </div>
         </div>
@@ -190,13 +225,15 @@ function Detail({ p }: { p: Pipeline }) {
               <li key={s.id} style={{ display: 'block', padding: '10px 16px', borderBottom: '1px solid var(--line)' }}>
                 <div className="row" style={{ justifyContent: 'space-between' }}>
                   <div><b>{s.title}</b> <code className="small">{s.skill ? `/${s.skill}${s.args ? ' ' + s.args : ''}` : (s.prompt ?? '').slice(0, 80)}</code>
-                    {s.generated && <span className="tag" style={{ marginLeft: 6 }}>tự thêm</span>}{s.expand && <span className="tag" style={{ marginLeft: 6 }}>sinh bước story</span>}</div>
+                    {s.generated && <span className="tag" style={{ marginLeft: 6 }}>{s.fixOf ? 'điểm kiểm tra thêm' : 'tự thêm'}</span>}{s.expand && <span className="tag" style={{ marginLeft: 6 }}>sinh bước story</span>}</div>
                   <div className="row">{t && <Status s={t.status} />}{!t && <SBadge s={s.status} />}
                     {['failed', 'cancelled'].includes(s.status) && p.status !== 'cancelled' && <>
                       <button className="btn sm" disabled={busy} onClick={() => call(`/steps/${s.id}/retry`)}>Chạy lại</button>
                       <button className="btn sm" disabled={busy || p.status === 'running'} onClick={() => call(`/steps/${s.id}/skip`)}>Bỏ qua</button></>}</div>
                 </div>
                 {s.why && <div className="small muted">{s.why}</div>}
+                {s.check && s.status !== 'running' && <div className={s.check.decision === 'pause' ? 'badge-err' : 'small muted'}>
+                  Điểm kiểm tra: {s.check.decision === 'continue' ? 'chạy tiếp' : s.check.decision === 'fix' ? 'tự chèn bước sửa' : 'dừng'} · {s.check.reason}</div>}
                 {s.warning && <div className="badge-err">{s.warning}</div>}
                 {t?.resultText && s.status !== 'running' && <details><summary className="small">Kết quả</summary><pre className="md small">{t.resultText}</pre>
                   {t.changedFiles?.length ? <div className="small">File đã đổi: {t.changedFiles.map(f => <span key={f.path} style={{ marginRight: 6 }}><code>{f.path}</code>{f.change !== 'D' && /^prototypes\/.+\.html?$/i.test(f.path) && <> <a className="btn sm primary" href={`/preview/${f.path.split('/').slice(1).map(encodeURIComponent).join('/')}`} target="_blank" rel="noopener">Mở prototype</a></>}</span>)}</div> : null}</details>}
@@ -242,6 +279,34 @@ function PlanCheck({ p }: { p: Pipeline }) {
           <div className={i.level === 'error' ? 'badge-err' : 'small'}>{i.message}{i.stepId && titleOf(i.stepId) ? <span className="muted"> · bước "{titleOf(i.stepId)}"</span> : null}</div></li>
       ))}</ul>}
       {!!p.omitted?.length && <div className="small muted">Bước mẫu planner bỏ: {p.omitted.map(o => `/${o.skill} (${o.why})`).join('; ')}</div>}
+    </div>
+  );
+}
+
+/** Critic loop (P2): one row per round; opinions only, the run is never blocked by them. */
+function Critique({ p }: { p: Pipeline }) {
+  const rounds = p.critiques ?? [];
+  if (!rounds.length) return null;
+  const head = (c: CritiqueRound) => {
+    if (c.error) return c.error;
+    if (c.ok === null) return 'Đang soát…';
+    const e = c.issues.filter(i => i.level === 'error').length, w = c.issues.length - e;
+    const res = c.ok && !c.issues.length ? 'Không thấy vấn đề.' : `${e} lỗi, ${w} cảnh báo.`;
+    return c.revised ? `${res} ${c.revisedBy === 'user' ? 'Đã gửi planner sửa theo yêu cầu của bạn.' : 'Đã gửi planner sửa.'}` : res;
+  };
+  const last = rounds.length - 1;
+  return (
+    <div className="stack" style={{ gap: 4 }}>
+      <div className="small"><b>Phản biện (producer)</b> <span className="muted">· ý kiến tham khảo, không chặn chạy</span></div>
+      {rounds.map((c, k) => (
+        <details key={k} open={k === last && c.issues.length > 0}>
+          <summary className="small">Vòng {c.round}: {head(c)}</summary>
+          {c.issues.length > 0 && <ul className="checks">{c.issues.map((i, n) => (
+            <li key={n}><span className={`mark ${i.level === 'error' ? 'bad' : ''}`} title={i.level === 'error' ? 'Lỗi' : 'Cảnh báo'}>{i.level === 'error' ? '✕' : '!'}</span>
+              <div className="small">{i.message}{i.stepTitle ? <span className="muted"> · bước "{i.stepTitle}"</span> : null}</div></li>
+          ))}</ul>}
+        </details>
+      ))}
     </div>
   );
 }

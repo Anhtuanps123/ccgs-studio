@@ -13,7 +13,10 @@ export const DEFAULT_SETTINGS = (): StudioSettings => ({
   redactPatterns: [],
   recentProjects: [],
   phoenix: { enabled: false, endpoint: 'http://127.0.0.1:6006/v1/traces' },
+  autoAllow: [],
 });
+
+const TOOL_RE = /^(\*|[A-Za-z0-9_.:-]{1,128})$/;
 
 export class BadSettings extends Error {}
 
@@ -57,6 +60,11 @@ export function mergeSettings(cur: StudioSettings, b: any): StudioSettings {
     }
     out.redactPatterns = pats;
   }
+  if (Array.isArray(b.autoAllow)) {
+    const tools = [...new Set(b.autoAllow.map((x: unknown) => String(x).trim()).filter(Boolean))] as string[];
+    for (const t of tools) if (!TOOL_RE.test(t)) throw new BadSettings(`Tên công cụ không hợp lệ: "${t}"`);
+    out.autoAllow = tools;
+  }
   if (b.phoenix) {
     if ('enabled' in b.phoenix) out.phoenix.enabled = !!b.phoenix.enabled;
     if ('endpoint' in b.phoenix) {
@@ -87,6 +95,7 @@ export class SettingsService {
         phoenix: { ...d.phoenix, ...(j.phoenix ?? {}) },
         redactPatterns: Array.isArray(j.redactPatterns) ? j.redactPatterns : [],
         recentProjects: Array.isArray(j.recentProjects) ? j.recentProjects : [],
+        autoAllow: Array.isArray(j.autoAllow) ? j.autoAllow.filter((x: unknown) => typeof x === 'string' && TOOL_RE.test(x)) : [],
       };
     } catch {
       this.cache = d;

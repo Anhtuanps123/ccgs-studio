@@ -19,6 +19,10 @@ export class PipelinesController {
   @Post() create(@Body() b: NewPipeline) { return wrap(() => this.p.create(b)); }
   @Put(':id/steps') steps(@Param('id') id: string, @Body() b: any) { return wrap(() => this.p.updateSteps(id, b ?? {})); }
   @Post(':id/start') start(@Param('id') id: string) { return wrap(() => this.p.start(id)); }
+  @Post(':id/revise') revise(@Param('id') id: string, @Body() b: any) { return wrap(() => this.p.revise(id, b?.note)); }
+  @Post(':id/skip-critique') skipCritique(@Param('id') id: string) { return wrap(() => this.p.skipCritique(id)); }
+  @Post(':id/replan') replan(@Param('id') id: string, @Body() b: any) { return wrap(() => this.p.replan(id, b?.note)); }
+  @Post(':id/answer') answer(@Param('id') id: string, @Body() b: any) { return wrap(() => this.p.answer(id, b?.text)); }
   @Post(':id/cancel') cancel(@Param('id') id: string) { return wrap(() => this.p.cancel(id)); }
   @Post(':id/steps/:step/retry') retry(@Param('id') id: string, @Param('step') step: string) { return wrap(() => this.p.retry(id, step)); }
   @Post(':id/steps/:step/skip') skip(@Param('id') id: string, @Param('step') step: string) { return wrap(() => this.p.skip(id, step)); }

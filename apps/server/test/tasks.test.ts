@@ -119,6 +119,29 @@ describe('task queue', () => {
     expect(q.get(a.id)!.status).toBe('cancelled');
   });
 
+  it('"Luôn cho phép" remembers the tool, allows waiting prompts for it and skips the prompt next time', async () => {
+    const f = fakeRunner();
+    const allowed = new Set<string>();
+    const q = new TaskQueue({ db: openDb(':memory:'), runner: f.runner, project: () => tmp, snapshot: async () => null,
+      autoAllow: { has: t => allowed.has(t), add: t => { allowed.add(t); } } });
+    const a = q.create({ kind: 'prompt', prompt: 'grep' });
+    await tick();
+    const hooks = f.runs.get(a.id)!.hooks, sig = new AbortController().signal;
+    const ask = (toolName: string, s = 'x') => hooks.ask({ kind: 'permission', toolUseId: null, agentInvocationId: null, permission: { toolName, inputSummary: s } }, sig);
+    const p1 = ask('Bash', 'grep a'), p2 = ask('Bash', 'grep b'), w = ask('Write', 'x.txt');
+    expect(q.interactions()).toHaveLength(3);
+    q.answer(q.interactions()[0].id, { decision: 'allow', always: true });
+    expect(await p1).toEqual({ decision: 'allow', message: undefined });
+    expect(await p2).toEqual({ decision: 'allow' });
+    expect(allowed.has('Bash')).toBe(true);
+    expect(q.interactions().map(i => i.permission?.toolName)).toEqual(['Write']); // other tools still ask
+    expect(await ask('Bash', 'grep c')).toEqual({ decision: 'allow' });
+    expect(q.interactions()).toHaveLength(1);
+    q.answer(q.interactions()[0].id, { decision: 'deny' });
+    expect(await w).toMatchObject({ decision: 'deny' });
+    expect(allowed.has('Write')).toBe(false);
+  });
+
   it('marks tasks left running by a previous process as failed on recover', async () => {
     const db = openDb(':memory:');
     const f = fakeRunner();

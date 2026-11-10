@@ -5,13 +5,22 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import type { NewPipeline, Pipeline, PipelineMode, PipelineSetup, PipelineStep, PlanStep, Rigor, Task } from '@ccgs/shared';
+import type { CriticIssue, CritiqueRound, NewPipeline, Pipeline, PipelineMode, PipelineSetup, PipelineStep, PlanIssue, Rigor, Task } from '@ccgs/shared';
 import type { Db } from '../store/db';
 import { BadTask, TaskQueue } from '../tasks/task-queue';
 import { checkPlan, loadTemplates, slugOf, templatesPrompt, type PlanTemplate } from './plan-rules';
+import { checkStep } from './checkpoint';
 
 export interface SkillInfo { name: string; description: string; argumentHint: string | null }
-export interface PipelineDeps { db: Db; queue: TaskQueue; skills: () => SkillInfo[]; project?: () => string | null; scan?: () => { status: string; summary: string | null; startDoneAt?: string | null }; templates?: () => PlanTemplate[] }
+export interface PipelineDeps {
+  db: Db; queue: TaskQueue; skills: () => SkillInfo[]; project?: () => string | null;
+  scan?: () => { status: string; summary: string | null; startDoneAt?: string | null }; templates?: () => PlanTemplate[];
+  /** Default for the critic loop when the request does not say (default true). */
+  critic?: boolean;
+}
+
+/** How many times the planner is sent back to fix the plan after a critique. */
+export const MAX_REVISIONS = 2;
 
 export const RIGORS: Rigor[] = ['minimal', 'standard', 'full'];
 
@@ -96,6 +105,130 @@ export function parsePlan(text: string, known: Set<string>): ParsedPlan {
   const omitted = Array.isArray(j.omitted) ? j.omitted.filter((o: any) => typeof o?.skill === 'string' && typeof o?.why === 'string' && o.why.trim())
     .map((o: any) => ({ skill: o.skill.trim().replace(/^\//, ''), why: o.why.trim() })) : [];
   return { summary: typeof j.summary === 'string' ? j.summary : null, steps, type: typeof j.type === 'string' && j.type.trim() ? j.type.trim() : null, slug: slugOf(j.slug), omitted };
+}
+
+const planJson = (p: Pipeline) => JSON.stringify({
+  type: p.planType ?? null, slug: p.slug ?? null, omitted: p.omitted ?? [],
+  steps: p.steps.filter(s => s.status === 'pending').map(s => ({ title: s.title, skill: s.skill, args: s.args, prompt: s.prompt ? cut(s.prompt, 300) : null, why: s.why, ...(s.generated ? { addedByStudio: true } : {}) })),
+}, null, 1);
+const doneLines = (p: Pipeline) => p.steps.filter(s => s.status !== 'pending')
+  .map(s => `- [${s.status}] ${s.title} (${s.skill ? `/${s.skill}${s.args ? ' ' + s.args : ''}` : 'prompt'})${s.check?.verdict ? ` verdict ${s.check.verdict}` : ''}${s.check && s.check.decision !== 'continue' ? `; ${s.check.reason}` : ''}`).join('\n');
+
+/** Sent to the work session when the user asks to re-plan the remaining steps after a checkpoint. */
+export function replanPrompt(p: Pipeline, note: string | null, templates: PlanTemplate[]): string {
+  const t = templates.find(x => x.id === p.planType);
+  const rigor = (p.rigor ?? 'minimal') as Rigor;
+  const pending = p.steps.filter(s => s.status === 'pending').map(s => ({ title: s.title, skill: s.skill, args: s.args, prompt: s.prompt ? cut(s.prompt, 300) : null, why: s.why }));
+  return `The situation changed while running the plan. Make a new plan for the REMAINING work only. Do NOT modify any file now and do not run commands that change anything; only read what the steps produced.
+
+Original request:
+"""
+${p.request}
+"""
+
+Steps already run:
+${doneLines(p) || '(none)'}
+${p.checkpoint ? `\nWhy the run stopped: ${p.checkpoint.reason}\n` : ''}${note ? `\nThe user's note: ${note}\n` : ''}
+Remaining steps of the current plan:
+\`\`\`json
+${JSON.stringify(pending, null, 1)}
+\`\`\`
+
+Keep the rules of the first plan (rigor ${rigor}${t ? `; template ${templatesPrompt([t], rigor).replace(/^- /, '')}` : ''}; art context before UI; "expand": "stories" on /create-stories). Do not repeat a completed step unless its result must be redone, and then say why.
+Reply with a short explanation in Vietnamese, then exactly one JSON block: {"summary", ${templates.length ? '"type", "slug", "omitted", ' : ''}"steps"} where "steps" are ONLY the steps still to run, in order.`;
+}
+const issueLines = (xs: PlanIssue[]) => xs.map(i => `- [${i.level}] ${i.message}`).join('\n');
+
+/** First words of every critic prompt: the runner uses them to skip /compact (the critic session is never resumed). */
+export const CRITIC_PROMPT_HEAD = 'You review a work plan for CCGS Studio';
+export const isCriticPrompt = (prompt: string | null | undefined) => !!prompt?.startsWith(CRITIC_PROMPT_HEAD);
+
+/**
+ * Read-only review of a plan version, done as the CCGS producer would. Runs in its own session.
+ * The review is done here, not delegated to the producer subagent: a second agent layer loads the whole
+ * system prompt again and gets the plan twice, while the session above it only relays the answer.
+ */
+export function criticPrompt(p: Pipeline, round: number, templates: PlanTemplate[]): string {
+  const t = templates.find(x => x.id === p.planType);
+  const found = (p.issues ?? []).filter(i => i.level !== 'info');
+  return `${CRITIC_PROMPT_HEAD} (round ${round}). Do NOT modify any file, do not run commands that change anything, and do not ask the user questions; only read (Read, Glob, Grep).
+
+Review it yourself, as the project's producer: scope (what the request asked, no more, no less), order and dependencies, wasted or repeated work, risk of a step failing for want of input. Do NOT spawn subagents (no Agent tool).
+
+Keep it cheap: check only what a concern needs. Glob to see if an output exists; Grep headings (\`^#\`) or a key, then Read that range with offset/limit. Do not read whole skill files or the whole catalog: Grep \`.claude/docs/workflow-catalog.yaml\` for the plan type and the skills in the plan, and a skill's \`argument-hint\` in its SKILL.md. About 10 tool calls is enough; stop when the questions below are answered.
+
+The user's request:
+"""
+${p.request}
+"""
+
+Rigor chosen for this plan: ${p.rigor ?? 'minimal'}. Plan template: ${t ? `${t.id} (${t.title})\n${templatesPrompt([t], (p.rigor ?? 'minimal') as Rigor)}` : (p.planType ?? 'Unknown')}
+
+${doneLines(p) ? `Steps already run (keep them; review only what follows):\n${doneLines(p)}\n\n` : ''}The plan (steps run in this order, one Claude session; "/create-stories" later adds /dev-story + /story-done per story by itself):
+\`\`\`json
+${planJson(p)}
+\`\`\`
+${found.length ? `\nThe studio's code check already reported these (do not repeat them):\n${issueLines(found)}\n` : ''}
+Check, against .claude/docs/workflow-catalog.yaml, project.yaml and what is on disk (design/, production/, prototypes/, the code):
+1. Does the plan deliver what the request asks? Anything missing, or work the request did not ask for?
+2. Does it follow the project's workflow for this rigor and stage?
+3. Does a step redo work whose output already exists?
+4. Are args concrete enough for the skill to run without guessing (paths, screen names, slug)?
+5. Order and dependencies between steps.
+
+Report only real problems. level "error": the plan would produce wrong or wasted work and must change. level "warn": worth the user's attention. No problems: "ok": true and an empty list.
+Reply with a short note in Vietnamese, then exactly one JSON block:
+\`\`\`json
+{"ok": true, "issues": [{"level": "error", "message": "<tiếng Việt>", "stepTitle": "<step title or null>"}]}
+\`\`\``;
+}
+
+/** What the user adds when they ask for a revision themselves ("Sửa theo phản biện"). */
+export interface UserRevision { note: string | null; plan: string }
+
+/** Sent to the planner's own session after a critique with errors, or when the user asks (then warnings count too). */
+export function revisePrompt(round: number, critic: CriticIssue[], server: PlanIssue[], hasTemplates: boolean, user?: UserRevision): string {
+  const lines = [
+    ...critic.map(i => `- [phản biện ${i.level}] ${i.message}${i.stepTitle ? ` (bước "${i.stepTitle}")` : ''}`),
+    ...server.map(i => `- [studio, ${i.level === 'error' ? 'bắt buộc' : 'cảnh báo'}] ${i.message}`),
+  ].join('\n');
+  const shape = `Reply with a short explanation in Vietnamese, then exactly one JSON block in the same shape as before: {"summary", ${hasTemplates ? '"type", "slug", "omitted", ' : ''}"steps"}.`;
+  if (!user) return `A reviewer checked your plan (round ${round}) and the studio's code check ran. Fix the plan for the issues below and keep the rest. Still do NOT modify any file. If you disagree with a reviewer issue, keep the step and say why in its "why"; studio issues must be fixed.
+
+${lines}
+
+${shape}`;
+  return `The user read the review of your plan${round ? ` (round ${round})` : ''} and asks you to revise the plan for ALL the issues below, warnings included. Still do NOT modify any file and do not run commands that change anything; only read.
+
+The current plan (it may include the user's own edits, which take precedence over your earlier version):
+\`\`\`json
+${user.plan}
+\`\`\`
+
+Issues:
+${lines || "(none listed; follow the user's note)"}
+${user.note ? `\nThe user's note (their decisions override the reviewer):\n"""\n${user.note}\n"""\n` : ''}
+For each issue:
+- When the fix is clear, change the plan: add a missing step (e.g. a setup or config step first), reorder steps whose checks depend on a later step, or put the decision into the step's args or prompt so the step does not have to stop and ask.
+- When it needs a decision only the user can make and the note does not give it, keep the step and start its "why" with "CẦN QUYẾT: <câu hỏi>".
+- When the issue is already resolved or does not apply, change nothing for it.
+Keep the rest of the plan as it is. Studio errors must be fixed.
+
+${shape}`;
+}
+
+/** Extracts the critic's verdict. Throws BadPipeline when there is no readable JSON. */
+export function parseCritique(text: string): { ok: boolean; issues: CriticIssue[] } {
+  const blocks = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)].map(m => m[1]);
+  const candidates = blocks.length ? blocks.reverse() : [text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)];
+  let j: any = null;
+  for (const c of candidates) { try { j = JSON.parse(c); if (j && (Array.isArray(j.issues) || typeof j.ok === 'boolean')) break; } catch { /* next */ } j = null; }
+  if (!j) throw new BadPipeline('Không đọc được kết quả phản biện (thiếu khối JSON có "ok"/"issues").');
+  const issues: CriticIssue[] = (Array.isArray(j.issues) ? j.issues : [])
+    .filter((i: any) => typeof i?.message === 'string' && i.message.trim())
+    .slice(0, 20)
+    .map((i: any) => ({ level: i.level === 'error' ? 'error' : 'warn', message: cut(i.message.trim(), 500), stepTitle: typeof i.stepTitle === 'string' && i.stepTitle.trim() ? i.stepTitle.trim() : null }));
+  return { ok: typeof j.ok === 'boolean' ? j.ok && !issues.some(i => i.level === 'error') : !issues.some(i => i.level === 'error'), issues };
 }
 
 export function normalizeStep(s: any, known: Set<string>, generated: boolean, keep?: Partial<PipelineStep>): PipelineStep {
@@ -185,9 +318,10 @@ export class PipelineService {
     const rigor = (input.rigor ?? setup.rigor) as Rigor;
     if (!RIGORS.includes(rigor)) throw new BadPipeline('rigor phải là minimal, standard hoặc full');
     const plan = this.d.queue.create({ kind: 'prompt', prompt: plannerPrompt(request, this.d.skills(), rigor, setup, scan?.summary, this.templates()), permissionMode: 'default', ...(model ? { model } : {}) });
+    const critic = typeof input.critic === 'boolean' ? input.critic : this.d.critic ?? true;
     return this.save({
-      id: randomUUID(), request, summary: null, mode, permissionMode, model, rigor, status: 'planning', planTaskId: plan.id, sessionId: null,
-      steps: [], createdAt: new Date().toISOString(), endedAt: null, error: null, note: null,
+      id: randomUUID(), request, summary: null, mode, permissionMode, model, rigor, status: 'planning', planTaskId: plan.id, planTasks: [plan.id], sessionId: null,
+      steps: [], createdAt: new Date().toISOString(), endedAt: null, error: null, note: null, critic, critiqueTaskId: null, critiques: [],
     });
   }
 
@@ -202,7 +336,8 @@ export class PipelineService {
       const prev = new Map(p.steps.map(s => [s.id, s]));
       const pending = body.steps.map((s: any) => {
         const old = s?.id ? prev.get(s.id) : undefined;
-        return normalizeStep(s, known, old?.generated ?? false, old && old.status === 'pending' ? { id: old.id } : undefined);
+        const n = normalizeStep(s, known, old?.generated ?? false, old && old.status === 'pending' ? { id: old.id } : undefined);
+        return old?.fixOf && old.status === 'pending' ? { ...n, fixOf: old.fixOf } : n; // keep the one-fix limit
       });
       p.steps = [...done, ...pending];
       p.edited = true;
@@ -222,7 +357,7 @@ export class PipelineService {
     const err = (p.issues ?? []).find(i => i.level === 'error');
     if (err) throw new BadPipeline(`Kế hoạch chưa đạt chuẩn: ${err.message}`);
     if (!p.steps.some(s => s.status === 'pending')) throw new BadPipeline('Không còn bước nào để chạy');
-    p.status = 'running'; p.error = null; p.note = null;
+    p.status = 'running'; p.error = null; p.note = null; p.checkpoint = null;
     return this.runNext(p);
   }
 
@@ -247,7 +382,7 @@ export class PipelineService {
   async cancel(id: string): Promise<Pipeline> {
     let p = this.must(id);
     if (p.status === 'completed' || p.status === 'cancelled') throw new BadPipeline('Chuỗi đã kết thúc');
-    const live = [p.planTaskId, ...p.steps.map(s => s.taskId)].filter((x): x is string => !!x)
+    const live = [p.planTaskId, p.critiqueTaskId, ...p.steps.map(s => s.taskId)].filter((x): x is string => !!x)
       .map(t => this.d.queue.get(t)).filter(t => t && !ENDED.includes(t.status));
     p.status = 'cancelled'; p.endedAt = new Date().toISOString(); p.note = 'Đã huỷ theo yêu cầu.';
     for (const s of p.steps) if (s.status === 'pending') s.status = 'cancelled';
@@ -255,6 +390,42 @@ export class PipelineService {
     for (const t of live) { try { await this.d.queue.cancel(t!.id); } catch (e) { if (!(e instanceof BadTask)) throw e; } }
     p = this.must(id);
     return p;
+  }
+
+  /** The file the plan template expects this step to produce, when the template names one. */
+  private outputOf(p: Pipeline, s: PipelineStep): { rel: string; exists: boolean } | null {
+    const root = this.d.project ? this.d.project() : null;
+    const slot = this.templates().find(t => t.id === p.planType)?.steps.find(x => x.skill === s.skill && x.output && !x.repeat);
+    if (!root || !slot?.output || (slot.output.includes('{slug}') && !p.slug)) return null;
+    const rel = slot.output.replace(/\{slug\}/g, p.slug ?? '');
+    return { rel, exists: fs.existsSync(path.join(root, rel)) };
+  }
+
+  /** Re-plan the steps still to run, in the work session (it knows what happened). Steps that ran stay. */
+  replan(id: string, note?: unknown): Pipeline {
+    const p = this.must(id);
+    if (!['paused', 'failed', 'review'].includes(p.status) || !p.steps.some(s => s.status !== 'pending')) throw new BadPipeline('Chỉ lập lại kế hoạch được khi chuỗi đã chạy ít nhất một bước và đang dừng');
+    if (!p.sessionId) throw new BadPipeline('Chuỗi chưa có session để lập lại kế hoạch');
+    const text = typeof note === 'string' && note.trim() ? cut(note.trim(), 2000) : null;
+    const t = this.d.queue.create({ kind: 'prompt', prompt: replanPrompt(p, text, this.templates()), resumeOf: p.sessionId, permissionMode: 'default', ...(p.model ? { model: p.model } : {}) });
+    p.replans = (p.replans ?? 0) + 1; p.replanning = true;
+    p.planTaskId = t.id; (p.planTasks ??= []).push(t.id); p.status = 'planning'; p.error = null; p.endedAt = null;
+    p.note = `Đang lập lại kế hoạch cho các bước còn lại (lần ${p.replans}).`;
+    return this.save(p);
+  }
+
+  /** Answer the question Claude ended a step with: the answer runs next as a prompt step in the same session. */
+  answer(id: string, text: unknown): Pipeline {
+    const p = this.must(id);
+    const a = typeof text === 'string' ? text.trim() : '';
+    if (!a) throw new BadPipeline('Câu trả lời trống');
+    if (!['paused', 'failed', 'review'].includes(p.status)) throw new BadPipeline('Chỉ trả lời được khi chuỗi đang dừng');
+    const at = p.steps.findIndex(s => s.status === 'pending');
+    const q = p.checkpoint?.question;
+    const step = { ...normalizeStep({ title: 'Trả lời Claude', prompt: cut(a, 4000), why: q ? `Trả lời: ${q}` : 'Người dùng trả lời' }, this.known(), true), fixOf: p.checkpoint?.stepId ?? null };
+    p.steps.splice(at < 0 ? p.steps.length : at, 0, step);
+    this.save(p);
+    return this.start(id);
   }
 
   private runNext(p: Pipeline): Pipeline {
@@ -280,30 +451,136 @@ export class PipelineService {
   private onTaskEnded(t: Task) {
     for (const p of this.list(200)) {
       if (p.status === 'planning' && p.planTaskId === t.id) return this.planDone(p, t);
+      if (p.status === 'critiquing' && p.critiqueTaskId === t.id) return this.critiqueDone(p, t);
       const s = p.steps.find(x => x.taskId === t.id);
       if (s && s.status === 'running') return this.stepDone(p, s, t);
     }
   }
 
   private planDone(p: Pipeline, t: Task) {
-    p.sessionId = t.sessionId;
-    if (t.status !== 'completed') {
-      p.status = 'failed'; p.endedAt = new Date().toISOString();
-      p.error = t.status === 'cancelled' ? 'Đã dừng bước lập kế hoạch.' : `Lập kế hoạch lỗi: ${t.error ?? 'không rõ'}`;
+    if (t.sessionId) p.sessionId = t.sessionId;
+    // A revision (after a critique) or a re-plan: on failure the plan there was stays.
+    const revision = p.steps.length > 0;
+    let failure: string | null = null;
+    if (t.status !== 'completed') failure = t.status === 'cancelled' ? 'Đã dừng bước lập kế hoạch.' : `Lập kế hoạch lỗi: ${t.error ?? 'không rõ'}`;
+    else {
+      try {
+        const plan = parsePlan(t.resultText ?? '', this.known());
+        // Steps that already ran stay; the reply replaces only what is still to run.
+        p.summary = plan.summary ?? p.summary; p.steps = [...p.steps.filter(s => s.status !== 'pending'), ...plan.steps];
+        p.planType = plan.type ?? p.planType ?? null; p.slug = plan.slug ?? p.slug ?? null;
+        this.check(p, false, plan.omitted);
+      } catch (e) { failure = (e as Error).message; }
+    }
+    if (failure && revision) {
+      // A failed revision keeps the previous plan; the critique stays visible for the user.
+      this.toReview(p, `Planner không ${p.replanning ? 'lập lại' : 'sửa'} được kế hoạch (${failure}). Giữ các bước trước đó.`);
+      return;
+    }
+    if (failure) {
+      p.status = 'failed'; p.error = failure; p.endedAt = new Date().toISOString();
       this.save(p);
       return;
     }
-    try {
-      const plan = parsePlan(t.resultText ?? '', this.known());
-      p.summary = plan.summary; p.steps = plan.steps; p.status = 'review';
-      p.planType = plan.type; p.slug = plan.slug;
-      this.check(p, false, plan.omitted);
-      const errs = (p.issues ?? []).filter(i => i.level === 'error').length;
-      p.note = errs ? `Kế hoạch có ${errs} lỗi so với mẫu. Sửa các bước rồi bấm Duyệt và chạy.` : 'Xem lại kế hoạch, sửa nếu cần, rồi bấm Duyệt và chạy.';
-    } catch (e) {
-      p.status = 'failed'; p.error = (e as Error).message; p.endedAt = new Date().toISOString();
-    }
+    if (p.critic) { this.startCritique(p); return; }
+    this.toReview(p);
+  }
+
+  /** Review state; the note says what still needs the user. */
+  private toReview(p: Pipeline, extra?: string) {
+    p.status = 'review'; p.critiqueTaskId = null; p.replanning = false;
+    const errs = (p.issues ?? []).filter(i => i.level === 'error').length;
+    const last = p.critiques?.[p.critiques.length - 1];
+    const critic = last && !last.error ? last.issues.filter(i => i.level === 'error').length : 0;
+    const warns = last && !last.error ? last.issues.length - critic : 0;
+    p.note = [
+      extra,
+      errs ? `Kế hoạch có ${errs} lỗi so với mẫu. Sửa các bước rồi bấm Duyệt và chạy.` : 'Xem lại kế hoạch, sửa nếu cần, rồi bấm Duyệt và chạy.',
+      critic ? `Phản biện vẫn còn ${critic} ý kiến cần xem (không chặn chạy).` : null,
+      warns && p.sessionId && !p.steps.some(s => s.status !== 'pending') ? `Phản biện có ${warns} cảnh báo: sửa tay, hoặc bấm "Sửa theo phản biện" để planner chỉnh.` : null,
+    ].filter(Boolean).join(' ');
     this.save(p);
+  }
+
+  private startCritique(p: Pipeline) {
+    const rounds = (p.critiques ??= []);
+    const round: CritiqueRound = { round: rounds.length + 1, planTaskId: p.planTaskId, taskId: null, ok: null, issues: [], error: null, revised: false, epoch: p.replans ?? 0 };
+    rounds.push(round);
+    try {
+      const t = this.d.queue.create({ kind: 'prompt', prompt: criticPrompt(p, round.round, this.templates()), permissionMode: 'default', ...(p.model ? { model: p.model } : {}) });
+      round.taskId = t.id; p.critiqueTaskId = t.id; p.status = 'critiquing';
+      p.note = `Đang phản biện kế hoạch (vòng ${round.round}).`;
+      this.save(p);
+    } catch (e) {
+      round.error = `Không tạo được task phản biện: ${(e as Error).message}`;
+      this.toReview(p);
+    }
+  }
+
+  private critiqueDone(p: Pipeline, t: Task) {
+    const round = p.critiques![p.critiques!.length - 1];
+    if (t.status !== 'completed') {
+      round.error = t.status === 'cancelled' ? 'Đã dừng phản biện.' : `Phản biện lỗi: ${t.error ?? 'không rõ'}`;
+      return this.toReview(p);
+    }
+    try { Object.assign(round, parseCritique(t.resultText ?? '')); }
+    catch (e) { round.error = (e as Error).message; return this.toReview(p); }
+    const critic = round.issues.filter(i => i.level === 'error');
+    const server = (p.issues ?? []).filter(i => i.level === 'error');
+    const revisions = p.critiques!.filter(c => c.revised && c.revisedBy !== 'user' && (c.epoch ?? 0) === (p.replans ?? 0)).length;
+    if (!(critic.length || server.length) || revisions >= MAX_REVISIONS || !p.sessionId) {
+      return this.toReview(p, critic.length && revisions >= MAX_REVISIONS ? `Đã sửa ${MAX_REVISIONS} lần theo phản biện.` : undefined);
+    }
+    try {
+      const r = this.d.queue.create({
+        kind: 'prompt', prompt: revisePrompt(round.round, critic, server, this.templates().length > 0),
+        resumeOf: p.sessionId, permissionMode: 'default', ...(p.model ? { model: p.model } : {}),
+      });
+      round.revised = true; round.revisedBy = 'auto';
+      p.planTaskId = r.id; (p.planTasks ??= []).push(r.id); p.critiqueTaskId = null; p.status = 'planning';
+      p.note = `Phản biện vòng ${round.round} thấy ${critic.length + server.length} lỗi; planner đang sửa kế hoạch (lần ${revisions + 1}/${MAX_REVISIONS}).`;
+      this.save(p);
+    } catch (e) {
+      this.toReview(p, `Không gửi lại được planner: ${(e as Error).message}.`);
+    }
+  }
+
+  /**
+   * "Sửa theo phản biện": the user sends the plan back to the planner session for every issue of the last
+   * critique (warnings too) plus the studio's warnings, with their note. The revised plan is critiqued again.
+   * Not counted against MAX_REVISIONS (that limit is for the automatic loop).
+   */
+  revise(id: string, note?: unknown): Pipeline {
+    const p = this.must(id);
+    if (p.status !== 'review') throw new BadPipeline('Chỉ sửa theo phản biện được khi kế hoạch đang chờ duyệt');
+    if (p.steps.some(s => s.status !== 'pending')) throw new BadPipeline('Chuỗi đã chạy bước đầu; dùng "Lập lại kế hoạch" cho các bước còn lại');
+    if (!p.sessionId) throw new BadPipeline('Chuỗi chưa có session của planner để sửa kế hoạch');
+    const text = typeof note === 'string' && note.trim() ? cut(note.trim(), 2000) : null;
+    const last = p.critiques?.[p.critiques.length - 1];
+    const critic = last && !last.error ? last.issues : [];
+    const server = (p.issues ?? []).filter(i => i.level !== 'info');
+    if (!critic.length && !server.length && !text) throw new BadPipeline('Không có ý kiến phản biện nào để sửa; nhập ghi chú nếu muốn planner chỉnh kế hoạch');
+    const t = this.d.queue.create({
+      kind: 'prompt', prompt: revisePrompt(last?.round ?? 0, critic, server, this.templates().length > 0, { note: text, plan: planJson(p) }),
+      resumeOf: p.sessionId, permissionMode: 'default', ...(p.model ? { model: p.model } : {}),
+    });
+    if (last && !last.error) { last.revised = true; last.revisedBy = 'user'; }
+    p.planTaskId = t.id; (p.planTasks ??= []).push(t.id); p.status = 'planning'; p.error = null;
+    p.note = `Planner đang sửa kế hoạch theo ${critic.length + server.length} ý kiến${text ? ' và ghi chú của bạn' : ''}.`;
+    return this.save(p);
+  }
+
+  /** Stop the critic loop now: keep the current plan and go to review. */
+  async skipCritique(id: string): Promise<Pipeline> {
+    const p = this.must(id);
+    const revising = p.status === 'planning' && p.steps.length > 0;
+    if (p.status !== 'critiquing' && !revising) throw new BadPipeline('Chuỗi không ở bước phản biện');
+    const live = p.status === 'critiquing' ? p.critiqueTaskId : p.planTaskId;
+    const last = p.critiques?.[p.critiques.length - 1];
+    if (p.status === 'critiquing' && last) last.error = 'Bỏ qua theo yêu cầu.';
+    this.toReview(p, revising ? 'Đã dừng việc sửa kế hoạch; giữ các bước trước đó.' : 'Đã bỏ qua phản biện.');
+    if (live) { try { await this.d.queue.cancel(live); } catch (e) { if (!(e instanceof BadTask)) throw e; } }
+    return this.must(id);
   }
 
   private stepDone(p: Pipeline, s: PipelineStep, t: Task) {
@@ -329,6 +606,22 @@ export class PipelineService {
       p.steps.splice(at, 0, ...added);
       p.note = stories.length ? `Đã thêm ${added.length} bước cho ${stories.length} story.` : 'Bước chia việc không tạo file story nào; thêm bước tay nếu cần.';
     }
+    // Checkpoint (P3): rules decide whether to go on, insert a fix, or stop for the user.
+    const out = this.outputOf(p, s);
+    const c = checkStep({ step: s, resultText: t.resultText, changedFiles: t.changedFiles, permissionMode: p.permissionMode, output: out?.rel ?? null, outputExists: !!out?.exists });
+    s.check = c.check;
+    if (c.fix.length) {
+      const known = this.known();
+      p.steps.splice(p.steps.indexOf(s) + 1, 0, ...c.fix.map(x => ({ ...normalizeStep(x, known, true), fixOf: x.fixOf })));
+      p.note = `${p.note ? p.note + ' ' : ''}Điểm kiểm tra: ${c.check.reason}`;
+    }
+    if (c.check.decision === 'pause') {
+      p.status = 'paused'; p.error = null;
+      p.checkpoint = { ...c.check, stepId: s.id };
+      p.note = `${p.note ? p.note + ' ' : ''}Điểm kiểm tra sau "${s.title}": ${c.check.reason}${c.check.replan ? ' Nên lập lại kế hoạch cho các bước còn lại.' : ' Xem kết quả rồi Tiếp tục, trả lời, sửa hoặc lập lại kế hoạch.'}`;
+      this.save(p);
+      return;
+    }
     if (p.mode === 'step') {
       const more = p.steps.some(x => x.status === 'pending');
       if (more) {
@@ -344,7 +637,8 @@ export class PipelineService {
   /** After a restart: running steps whose task died with the old process need the user's decision. */
   recover() {
     for (const p of this.list(200)) {
-      const ids = p.status === 'planning' ? [p.planTaskId] : p.status === 'running' ? p.steps.filter(s => s.status === 'running').map(s => s.taskId) : [];
+      const ids = p.status === 'planning' ? [p.planTaskId] : p.status === 'critiquing' ? [p.critiqueTaskId ?? null]
+        : p.status === 'running' ? p.steps.filter(s => s.status === 'running').map(s => s.taskId) : [];
       for (const id of ids) {
         const t = id ? this.d.queue.get(id) : null;
         if (t && ENDED.includes(t.status)) this.onTaskEnded(t);
