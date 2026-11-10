@@ -171,6 +171,18 @@ npm start              # http://127.0.0.1:4310
 - Chạy thử thật P1, P2 và P3 với kế hoạch piggy-bank, rồi chỉnh luật theo log thật.
 - Có thể cho phép tự lập lại kế hoạch (không cần bấm) ở chế độ "Tự chạy hết", có giới hạn số lần. Hiện tại cố ý để người dùng bấm, theo nguyên tắc "user-driven" của CCGS.
 
+### Graphify: phân tích → duyệt → chạy (brief `BRIEF_PHAN_TICH_GRAPHIFY.md`, người dùng gửi 2026-11-10)
+
+- **Bước 0 xong** (2026-11-10). Báo cáo: `docs/graphify-phase-0-report.md`. Script thử: `spikes/graphify/`. **Chưa sửa code ứng dụng.**
+  - Cách dựng ngoài project: `GRAPHIFY_OUT` = `~/.ccgs-studio/projects/<id>/graphify`, `GRAPHIFY_BACKEND=none`, `graphify update <project>`. Danh sách loại trừ ghi vào `<out>/.graphify_build.json`, vì `update` bản 0.9.103 không có `--exclude`. Đã xác nhận `git status` của Meodoku không đổi.
+  - graphify 0.9.103 đã được cài lại kèm `[mcp]`; bản trước thiếu, nên `graphify-mcp` chết ngay khi chạy. Claude gọi được `query_graph` qua `mcpServers` của SDK.
+- **Đang chờ người dùng quyết (báo cáo §7):**
+  - Mục tiêu đo: planner thật ra chỉ gọi khoảng 4 tool, chi phí nằm ở ngữ cảnh cố định; con số 28–38 tool là của vòng phản biện.
+  - Cách truy vấn sẵn với yêu cầu tiếng Việt: truy vấn bằng tiếng Việt cho kết quả lạc đề.
+  - Danh sách loại trừ mặc định.
+  - 2 yêu cầu mẫu để đo mốc.
+- **Bước 1–3: chưa làm.** Làm lần lượt, dừng sau mỗi bước.
+
 ## 6. Việc còn treo và chờ người dùng quyết
 
 1. **T-AG-05 (sửa agent):** chưa làm, vì tính năng này ghi vào `.claude/agents/`, trái nguyên tắc số 2. Người dùng chọn (a) ngoại lệ có diff và xác nhận, hoặc (b) bỏ. **Chưa có câu trả lời.**
