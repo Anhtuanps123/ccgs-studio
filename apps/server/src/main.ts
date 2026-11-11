@@ -8,7 +8,9 @@ import path from 'node:path';
 import { SettingsService } from './settings/settings.service';
 import { CcgsAdapterService } from './ccgs/adapter.service';
 import { CcgsController } from './ccgs/ccgs.controller';
-import { SystemController, projectInfo } from './system/system.controller';
+import { SystemController, forgetClaudeVersion, projectInfo } from './system/system.controller';
+import { SetupController } from './system/setup.controller';
+import { SetupService } from './system/packages';
 import { LiveGateway } from './live/live.gateway';
 import { originGuard } from './security/origin';
 import { MonitorService } from './monitor/monitor.service';
@@ -22,16 +24,19 @@ import { baseRef, takeSnapshot, taskDiffs } from './tasks/git-snapshot';
 import { summarizeInput } from './monitor/projector';
 import { configureRedaction } from './monitor/redact';
 import { InsightsController, PhoenixExporter } from './insights/insights.controller';
-import { isCriticPrompt, PipelineService } from './pipelines/pipeline.service';
+import { PipelineService } from './pipelines/pipeline.service';
 import { GameScanService } from './pipelines/game-scan';
+import { unityMcpCheck } from './system/unity-mcp';
 import { ScanController } from './pipelines/scan.controller';
 import { PipelinesController } from './pipelines/pipelines.controller';
 import { AlertsController } from './system/alerts.controller';
+import { GraphService } from './graph/graph.service';
+import { GraphController } from './graph/graph.controller';
 
 const PORT = Number(process.env.PORT ?? 4310);
 
 @Module({
-  controllers: [CcgsController, SystemController, IngestController, MonitorController, HooksController, TasksController, InsightsController, PipelinesController, ScanController, AlertsController],
+  controllers: [CcgsController, SystemController, IngestController, MonitorController, HooksController, TasksController, InsightsController, PipelinesController, ScanController, AlertsController, GraphController, SetupController],
   providers: [
     SettingsService, CcgsAdapterService, LiveGateway, MonitorService,
     {
@@ -51,26 +56,44 @@ const PORT = Number(process.env.PORT ?? 4310);
             has: tool => tool !== 'AskUserQuestion' && (s.get().autoAllow ?? []).some(x => x === '*' || x === tool),
             add: tool => { const cur = s.get().autoAllow ?? []; if (!cur.includes(tool)) s.update({ autoAllow: [...cur, tool] }); },
           },
-          runner: sdkRunner({ cwd: () => project() ?? process.cwd(), settingsFile: h.studioSettingsFile(), summarize: (t, i) => summarizeInput(t, i, project()), compactAfter: t => s.get().taskDefaults.compactAfter !== false && !isCriticPrompt(t.prompt) }),
+          runner: sdkRunner({ cwd: () => project() ?? process.cwd(), settingsFile: h.studioSettingsFile(), summarize: (t, i) => summarizeInput(t, i, project()) }),
         });
       },
     },
     {
       provide: GameScanService,
       inject: [TaskQueue, SettingsService],
-      useFactory: (q: TaskQueue, st: SettingsService) => new GameScanService({
-        home: st.dir, queue: q,
+      useFactory: (q: TaskQueue, st: SettingsService) => {
+        const project = () => { const p = st.get().projectPath; return p && projectInfo(p).valid ? p : null; };
+        return new GameScanService({ home: st.dir, queue: q, project, unityCheck: () => unityMcpCheck(project()) });
+      },
+    },
+    {
+      provide: GraphService,
+      inject: [TaskQueue, SettingsService, MonitorService],
+      useFactory: (q: TaskQueue, st: SettingsService, m: MonitorService) => new GraphService({
+        home: st.dir, tasks: q.bus, settings: () => st.get().graphify,
         project: () => { const p = st.get().projectPath; return p && projectInfo(p).valid ? p : null; },
+        log: (lvl, msg) => m.log(lvl, 'studio', msg),
       }),
     },
     {
       provide: PipelineService,
-      inject: [MonitorService, TaskQueue, CcgsAdapterService, SettingsService, GameScanService],
-      useFactory: (m: MonitorService, q: TaskQueue, a: CcgsAdapterService, st: SettingsService, gs: GameScanService) => new PipelineService({
-        db: m.db, queue: q, scan: () => gs.get(),
+      inject: [MonitorService, TaskQueue, CcgsAdapterService, SettingsService, GameScanService, GraphService],
+      useFactory: (m: MonitorService, q: TaskQueue, a: CcgsAdapterService, st: SettingsService, gs: GameScanService, g: GraphService) => new PipelineService({
+        db: m.db, queue: q, scan: () => gs.get(), graph: g,
         project: () => { const p = st.get().projectPath; return p && projectInfo(p).valid ? p : null; },
         skills: () => (a.snapshot?.skills ?? []).filter(s => s.hasSkillMd && s.userInvocable !== false)
           .map(s => ({ name: s.name, description: s.description, argumentHint: s.argumentHint })).concat(studioSkills()),
+      }),
+    },
+    {
+      provide: SetupService,
+      inject: [SettingsService],
+      useFactory: (st: SettingsService) => new SetupService({
+        claudeCommand: () => st.get().claudeCommand,
+        unityCheck: () => { const p = st.get().projectPath; return unityMcpCheck(p && projectInfo(p).valid ? p : null); },
+        onInstalled: id => { if (id === 'claude') forgetClaudeVersion(); },
       }),
     },
     { provide: PhoenixExporter, inject: [MonitorService, SettingsService], useFactory: (m: MonitorService, s: SettingsService) => new PhoenixExporter(m, s) },
@@ -87,6 +110,8 @@ class AppModule implements OnModuleInit {
     private readonly phoenix: PhoenixExporter,
     private readonly pipelines: PipelineService,
     private readonly scan: GameScanService,
+    private readonly graph: GraphService,
+    private readonly setup: SetupService,
   ) {}
 
   async onModuleInit() {
@@ -108,7 +133,14 @@ class AppModule implements OnModuleInit {
     t.on('log', (lvl, msg, sid) => this.monitor.log(lvl, 'studio', msg, sid));
     this.tasks.recover();
     this.pipelines.bus.on('pipeline', x => this.live.emit('pipeline:upsert', x));
+    this.pipelines.bus.on('removed', id => this.live.emit('pipeline:delete', { id }));
     this.scan.bus.on('scan', x => this.live.emit('scan:upsert', x));
+    this.graph.bus.on('graph', x => this.live.emit('graph:upsert', x));
+    this.setup.bus.on('job', x => {
+      this.live.emit('setup:job', x);
+      if (x.status === 'completed' && x.packageId === 'claude') this.live.emitConfigChanged(['hooks']); // sidebar re-reads the Claude version
+      if (x.status !== 'running') this.monitor.log(x.status === 'completed' ? 'info' : 'warn', 'studio', `Cài ${x.label}: ${x.status}${x.exitCode !== null ? ` (mã ${x.exitCode})` : ''}`);
+    });
     this.pipelines.bus.on('log', (lvl, msg) => this.monitor.log(lvl, 'studio', msg));
     this.pipelines.recover();
 

@@ -5,19 +5,32 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import type { CriticIssue, CritiqueRound, NewPipeline, Pipeline, PipelineMode, PipelineSetup, PipelineStep, PlanIssue, Rigor, Task } from '@ccgs/shared';
+import type { CriticIssue, CritiqueRound, NewPipeline, Pipeline, PipelineGraphContext, PipelineMode, PipelineSetup, PipelineStep, PlanIssue, PlanRoleInfo, Rigor, Task } from '@ccgs/shared';
 import type { Db } from '../store/db';
 import { BadTask, TaskQueue } from '../tasks/task-queue';
-import { checkPlan, loadTemplates, slugOf, templatesPrompt, type PlanTemplate } from './plan-rules';
+import { activeRoles, checkPlan, fillRoles, loadRoles, loadTemplates, rolesPrompt, slugOf, templatesPrompt, type PlanRoleDef, type PlanTemplate } from './plan-rules';
 import { checkStep } from './checkpoint';
+import { keywordsFromInput, keywordsFromRequest } from '../graph/graph-core';
+import type { GraphContext } from '../graph/graph.service';
+import type { SessionExtras } from '../tasks/runner';
 
 export interface SkillInfo { name: string; description: string; argumentHint: string | null }
 export interface PipelineDeps {
   db: Db; queue: TaskQueue; skills: () => SkillInfo[]; project?: () => string | null;
   scan?: () => { status: string; summary: string | null; startDoneAt?: string | null }; templates?: () => PlanTemplate[];
+  /** Roles the user can pick (default: plugin/plan-roles.yaml). */
+  roles?: () => PlanRoleDef[];
   /** Default for the critic loop when the request does not say (default true). */
   critic?: boolean;
+  /**
+   * Code map (graphify): pre-query for the first plan when the request names code identifiers, and the MCP server
+   * attached to every task (Claude queries the graph itself; brief 6.2).
+   */
+  graph?: { enabled(): boolean; context(keywords: string[]): Promise<GraphContext>; mcpSession?(): Promise<{ extras: SessionExtras | null; detail: string }> };
 }
+
+/** Moved to the graph module: it is now the system prompt of every task with the graphify MCP server. */
+export { CODE_TOOLS_HINT } from '../graph/graph-core';
 
 /** How many times the planner is sent back to fix the plan after a critique. */
 export const MAX_REVISIONS = 2;
@@ -52,7 +65,7 @@ const MAX_STEPS = 40;
 const ENDED: Task['status'][] = ['completed', 'failed', 'cancelled'];
 const cut = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
-export function plannerPrompt(request: string, skills: SkillInfo[], rigor?: Rigor | null, setup?: PipelineSetup | null, gameScan?: string | null, templates: PlanTemplate[] = []): string {
+export function plannerPrompt(request: string, skills: SkillInfo[], rigor?: Rigor | null, setup?: PipelineSetup | null, gameScan?: string | null, templates: PlanTemplate[] = [], codeMap?: { keywords: string[]; text: string } | null, roles: PlanRoleDef[] = [], chosen: string[] | null = null): string {
   const list = skills.map(s => `- /${s.name}${s.argumentHint ? ` ${s.argumentHint}` : ''}: ${cut(s.description.replace(/\s+/g, ' '), 160)}`).join('\n');
   return `You are planning work for CCGS Studio. Do NOT modify any file and do not run commands that change anything; only read (Read, Glob, Grep) to understand the project.
 
@@ -74,9 +87,14 @@ Plan templates (the studio standard). Pick exactly ONE template id as "type" and
 ${templatesPrompt(templates, rigor ?? 'minimal')}
 "slug": the feature id in kebab-case (for example piggy-bank); it fills {slug} in the template.
 ` : ''}
-${gameScan ? `What the game already has (scanned from the Unity Editor through Unity MCP; build on it, do not redo existing screens):
+${roles.length ? rolesPrompt(roles, chosen) + '\n\n' : ''}${gameScan ? `What the game already has (scanned from the Unity Editor through Unity MCP; build on it, do not redo existing screens):
 """
 ${cut(gameScan, 6000)}
+"""
+
+` : ''}${codeMap ? `Code map (graphify, built from the project's code by tree-sitter, read-only; it can be slightly behind the files on disk). The studio looked up: ${codeMap.keywords.join(', ')}. Each NODE line gives the source file and line (loc=L…). Use it to find the relevant code; Read only the line ranges you need instead of searching the whole project:
+"""
+${codeMap.text}
 """
 
 ` : ''}If a step creates stories (for example /create-stories), set "expand": "stories" on it: the studio will then add /dev-story and /story-done steps for each story file it creates, so do not list those per-story steps yourself.
@@ -87,7 +105,7 @@ ${list}
 Reply with a short explanation in Vietnamese, then exactly one JSON block in this shape:
 \`\`\`json
 {"summary": "<1-2 câu tiếng Việt>",${templates.length ? ' "type": "<template id>", "slug": "<feature-slug>", "omitted": [{"skill": "<skill>", "why": "<tiếng Việt>"}],' : ''} "steps": [
-  {"title": "<tiếng Việt, ngắn>", "skill": "<skill name without slash, or null>", "args": "<arguments or null>", "prompt": "<only when skill is null>", "why": "<tiếng Việt, ngắn>", "expand": null}
+  {"title": "<tiếng Việt, ngắn>", "skill": "<skill name without slash, or null>", "args": "<arguments or null>", "prompt": "<only when skill is null>", "why": "<tiếng Việt, ngắn>", "expand": null${roles.length ? ', "role": "<role id>"' : ''}}
 ]}
 \`\`\``;
 }
@@ -109,16 +127,16 @@ export function parsePlan(text: string, known: Set<string>): ParsedPlan {
 
 const planJson = (p: Pipeline) => JSON.stringify({
   type: p.planType ?? null, slug: p.slug ?? null, omitted: p.omitted ?? [],
-  steps: p.steps.filter(s => s.status === 'pending').map(s => ({ title: s.title, skill: s.skill, args: s.args, prompt: s.prompt ? cut(s.prompt, 300) : null, why: s.why, ...(s.generated ? { addedByStudio: true } : {}) })),
+  steps: p.steps.filter(s => s.status === 'pending').map(s => ({ title: s.title, skill: s.skill, args: s.args, prompt: s.prompt ? cut(s.prompt, 300) : null, why: s.why, ...(s.role ? { role: s.role } : {}), ...(s.generated ? { addedByStudio: true } : {}) })),
 }, null, 1);
 const doneLines = (p: Pipeline) => p.steps.filter(s => s.status !== 'pending')
   .map(s => `- [${s.status}] ${s.title} (${s.skill ? `/${s.skill}${s.args ? ' ' + s.args : ''}` : 'prompt'})${s.check?.verdict ? ` verdict ${s.check.verdict}` : ''}${s.check && s.check.decision !== 'continue' ? `; ${s.check.reason}` : ''}`).join('\n');
 
 /** Sent to the work session when the user asks to re-plan the remaining steps after a checkpoint. */
-export function replanPrompt(p: Pipeline, note: string | null, templates: PlanTemplate[]): string {
+export function replanPrompt(p: Pipeline, note: string | null, templates: PlanTemplate[], roles: PlanRoleDef[] = []): string {
   const t = templates.find(x => x.id === p.planType);
   const rigor = (p.rigor ?? 'minimal') as Rigor;
-  const pending = p.steps.filter(s => s.status === 'pending').map(s => ({ title: s.title, skill: s.skill, args: s.args, prompt: s.prompt ? cut(s.prompt, 300) : null, why: s.why }));
+  const pending = p.steps.filter(s => s.status === 'pending').map(s => ({ title: s.title, skill: s.skill, args: s.args, prompt: s.prompt ? cut(s.prompt, 300) : null, why: s.why, ...(s.role ? { role: s.role } : {}) }));
   return `The situation changed while running the plan. Make a new plan for the REMAINING work only. Do NOT modify any file now and do not run commands that change anything; only read what the steps produced.
 
 Original request:
@@ -134,9 +152,14 @@ Remaining steps of the current plan:
 ${JSON.stringify(pending, null, 1)}
 \`\`\`
 
-Keep the rules of the first plan (rigor ${rigor}${t ? `; template ${templatesPrompt([t], rigor).replace(/^- /, '')}` : ''}; art context before UI; "expand": "stories" on /create-stories). Do not repeat a completed step unless its result must be redone, and then say why.
+Keep the rules of the first plan (rigor ${rigor}${t ? `; template ${templatesPrompt([t], rigor).replace(/^- /, '')}` : ''}; art context before UI; "expand": "stories" on /create-stories${rolesNote(p, roles)}). Do not repeat a completed step unless its result must be redone, and then say why.
 Reply with a short explanation in Vietnamese, then exactly one JSON block: {"summary", ${templates.length ? '"type", "slug", "omitted", ' : ''}"steps"} where "steps" are ONLY the steps still to run, in order.`;
 }
+/** "; only the roles Designer, Developer" when the user limited the roles, else ''. */
+const rolesNote = (p: Pipeline, roles: PlanRoleDef[]) => {
+  const act = activeRoles(p.roles, roles);
+  return act ? `; only the roles ${act.map(id => roles.find(r => r.id === id)?.title ?? id).join(', ')} (role ids ${act.join(', ')}), every step with its "role"` : '';
+};
 const issueLines = (xs: PlanIssue[]) => xs.map(i => `- [${i.level}] ${i.message}`).join('\n');
 
 /** First words of every critic prompt: the runner uses them to skip /compact (the critic session is never resumed). */
@@ -148,7 +171,7 @@ export const isCriticPrompt = (prompt: string | null | undefined) => !!prompt?.s
  * The review is done here, not delegated to the producer subagent: a second agent layer loads the whole
  * system prompt again and gets the plan twice, while the session above it only relays the answer.
  */
-export function criticPrompt(p: Pipeline, round: number, templates: PlanTemplate[]): string {
+export function criticPrompt(p: Pipeline, round: number, templates: PlanTemplate[], roles: PlanRoleDef[] = []): string {
   const t = templates.find(x => x.id === p.planType);
   const found = (p.issues ?? []).filter(i => i.level !== 'info');
   return `${CRITIC_PROMPT_HEAD} (round ${round}). Do NOT modify any file, do not run commands that change anything, and do not ask the user questions; only read (Read, Glob, Grep).
@@ -162,7 +185,7 @@ The user's request:
 ${p.request}
 """
 
-Rigor chosen for this plan: ${p.rigor ?? 'minimal'}. Plan template: ${t ? `${t.id} (${t.title})\n${templatesPrompt([t], (p.rigor ?? 'minimal') as Rigor)}` : (p.planType ?? 'Unknown')}
+Rigor chosen for this plan: ${p.rigor ?? 'minimal'}.${rolesNote(p, roles) ? ` Roles:${rolesNote(p, roles).replace(/^;/, '')}. Work of other roles is left out on purpose: do not report it as missing.` : ''} Plan template: ${t ? `${t.id} (${t.title})\n${templatesPrompt([t], (p.rigor ?? 'minimal') as Rigor)}` : (p.planType ?? 'Unknown')}
 
 ${doneLines(p) ? `Steps already run (keep them; review only what follows):\n${doneLines(p)}\n\n` : ''}The plan (steps run in this order, one Claude session; "/create-stories" later adds /dev-story + /story-done per story by itself):
 \`\`\`json
@@ -242,6 +265,7 @@ export function normalizeStep(s: any, known: Set<string>, generated: boolean, ke
     id: keep?.id ?? randomUUID(), status: keep?.status ?? 'pending', taskId: keep?.taskId ?? null, generated: keep?.generated ?? generated,
     title: str(s?.title) ?? (skill ? `/${skill}` : 'Bước'), skill, args: skill ? str(s?.args) : null, prompt: skill ? null : str(s?.prompt),
     why: str(s?.why), expand: s?.expand === 'stories' || skill === 'create-stories' ? 'stories' : null, warning,
+    role: str(s?.role), // checked against plan-roles.yaml by fillRoles (unknown -> the skill's role)
   };
 }
 
@@ -251,14 +275,42 @@ export function storiesFrom(t: Task): string[] {
 }
 
 export class PipelineService {
-  readonly bus = new EventEmitter<{ pipeline: [Pipeline]; log: ['info' | 'warn' | 'error', string] }>();
+  readonly bus = new EventEmitter<{ pipeline: [Pipeline]; removed: [string]; log: ['info' | 'warn' | 'error', string] }>();
 
   constructor(private readonly d: PipelineDeps) {
     d.db.$client.exec('CREATE TABLE IF NOT EXISTS pipelines (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, data TEXT NOT NULL)');
     d.queue.bus.on('task', t => { if (ENDED.includes(t.status)) this.onTaskEnded(t); });
+    if (d.graph?.mcpSession) d.queue.setSessionExtras(t => this.sessionExtras(t));
+  }
+
+  /**
+   * Right before any task starts (planner, critic, steps, game scan, plain tasks): the graphify MCP server and its
+   * system prompt when the graph is usable (brief 6.2). The prompt asks Claude to query the graph first only when the
+   * task has to find code. For a planner task it is also recorded on Pipeline.graph.
+   */
+  async sessionExtras(t: Task): Promise<SessionExtras | null> {
+    if (!this.d.graph?.mcpSession) return null;
+    let r: { extras: SessionExtras | null; detail: string };
+    try { r = await this.d.graph.mcpSession(); }
+    catch (e) { r = { extras: null, detail: `Không chuẩn bị được MCP graphify: ${(e as Error).message}` }; }
+    const p = this.list(200).find(x => x.status === 'planning' && x.planTaskId === t.id) ?? null;
+    if (p) {
+      p.graph = { ...(p.graph ?? { status: 'skipped', keywords: [], source: null, detail: '', chars: 0 }), mcp: !!r.extras, mcpDetail: r.detail, mcpCalls: null };
+      this.save(p);
+      if (!r.extras) this.bus.emit('log', 'info', `Lập kế hoạch không gắn MCP graphify: ${r.detail}`);
+    }
+    return { ...(r.extras ?? {}), note: r.detail };
   }
 
   private known() { return new Set(this.d.skills().map(s => s.name)); }
+  private roles(): PlanRoleDef[] {
+    if (this.d.roles) return this.d.roles();
+    const r = loadRoles();
+    for (const e of r.errors) this.bus.emit('log', 'warn', `plan-roles.yaml lỗi: ${e}`);
+    return r.roles;
+  }
+  /** GET /api/pipelines/roles */
+  roleList(): PlanRoleInfo[] { return this.roles().map(r => ({ id: r.id, title: r.title, hint: r.hint, skills: r.skills })); }
   private templates(): PlanTemplate[] {
     if (this.d.templates) return this.d.templates();
     const r = loadTemplates();
@@ -272,7 +324,7 @@ export class PipelineService {
     const r = checkPlan({
       steps: p.steps, type: p.planType ?? null, slug: p.slug ?? null, omitted, rigor: (p.rigor ?? 'minimal') as Rigor, request: p.request,
       templates: this.templates(), root: this.d.project ? this.d.project() : null, byUser,
-      make: s => normalizeStep(s, known, true),
+      make: s => normalizeStep(s, known, true), roles: this.roles(), chosen: p.roles ?? null,
     });
     p.steps = r.steps; p.issues = r.issues; p.omitted = omitted; p.planTypeTitle = r.template?.title ?? null;
   }
@@ -285,6 +337,7 @@ export class PipelineService {
     return (this.d.db.$client.prepare('SELECT data FROM pipelines ORDER BY created_at DESC LIMIT ?').all(limit) as any[]).map(r => JSON.parse(r.data));
   }
   private save(p: Pipeline): Pipeline {
+    fillRoles(p.steps, this.roles()); // steps added outside the plan check (stories, fixes) get their skill's role
     this.d.db.$client.prepare('INSERT INTO pipelines (id, created_at, data) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data')
       .run(p.id, p.createdAt, JSON.stringify(p));
     this.bus.emit('pipeline', p);
@@ -311,18 +364,99 @@ export class PipelineService {
     const permissionMode = input.permissionMode ?? 'default';
     if (!['default', 'acceptEdits', 'plan'].includes(permissionMode)) throw new BadPipeline('permissionMode không hợp lệ');
     const model = typeof input.model === 'string' && input.model.trim() ? input.model.trim() : null;
+    const { setup, scan } = this.planGates();
+    const rigor = (input.rigor ?? setup.rigor) as Rigor;
+    if (!RIGORS.includes(rigor)) throw new BadPipeline('rigor phải là minimal, standard hoặc full');
+    let typed: string[];
+    try { typed = keywordsFromInput(input.codeKeywords); } catch (e) { throw new BadPipeline((e as Error).message); }
+    const critic = typeof input.critic === 'boolean' ? input.critic : this.d.critic ?? true;
+    let roles: string[] | null = null;
+    if (Array.isArray(input.roles)) {
+      const ids = new Set(this.roles().map(r => r.id));
+      roles = [...new Set(input.roles.filter((r): r is string => typeof r === 'string' && ids.has(r)))];
+      if (ids.size && !roles.length) throw new BadPipeline('Chọn ít nhất một vai trò');
+      if (!ids.size) roles = null;
+    }
+    const p: Pipeline = {
+      id: randomUUID(), request, summary: null, mode, permissionMode, model, rigor, status: 'planning', planTaskId: null, planTasks: [], sessionId: null,
+      steps: [], createdAt: new Date().toISOString(), endedAt: null, error: null, note: null, critic, critiqueTaskId: null, critiques: [],
+      codeKeywords: typed, graph: null, roles,
+    };
+    return this.plan(p, setup, scan?.summary ?? null);
+  }
+
+  /** What planning needs: /start done and a finished game scan. */
+  private planGates() {
     const setup = this.setup();
     if (!setup.started) throw new BadPipeline(`Project chưa chạy /start (project.yaml chưa có modes.rigor)${setup.error ? `: ${setup.error}` : ''}. Chạy /start trước rồi lập kế hoạch.`);
     const scan = this.d.scan?.();
     if (scan && scan.status !== 'ok') throw new BadPipeline('Chưa quét game qua Unity MCP. Vào Tổng quan, bấm "Quét game" (cần mở Unity Editor) rồi lập kế hoạch.');
-    const rigor = (input.rigor ?? setup.rigor) as Rigor;
-    if (!RIGORS.includes(rigor)) throw new BadPipeline('rigor phải là minimal, standard hoặc full');
-    const plan = this.d.queue.create({ kind: 'prompt', prompt: plannerPrompt(request, this.d.skills(), rigor, setup, scan?.summary, this.templates()), permissionMode: 'default', ...(model ? { model } : {}) });
-    const critic = typeof input.critic === 'boolean' ? input.critic : this.d.critic ?? true;
-    return this.save({
-      id: randomUUID(), request, summary: null, mode, permissionMode, model, rigor, status: 'planning', planTaskId: plan.id, planTasks: [plan.id], sessionId: null,
-      steps: [], createdAt: new Date().toISOString(), endedAt: null, error: null, note: null, critic, critiqueTaskId: null, critiques: [],
-    });
+    return { setup, scan };
+  }
+
+  /** First plan of a pipeline (new or restarted): code map lookup in the background when there are keywords, then the planner. */
+  private plan(p: Pipeline, setup: PipelineSetup, gameScan: string | null): Pipeline {
+    const typed = p.codeKeywords ?? [];
+    const keywords = typed.length ? typed : keywordsFromRequest(p.request);
+    const source = typed.length ? 'user' : 'request';
+    // No identifier, or the code map is off: plan right away, as before.
+    if (!keywords.length || !this.d.graph || !this.d.graph.enabled()) {
+      p.graph = { status: keywords.length ? 'unavailable' : 'skipped', keywords, source: keywords.length ? source : null, chars: 0,
+        detail: !keywords.length ? 'Yêu cầu không có tên lớp/hàm (PascalCase, camelCase) và ô "Từ khoá mã nguồn" trống: không tra bản đồ code.'
+          : !this.d.graph ? 'Studio chưa có module bản đồ code.' : 'Bản đồ code đang tắt trong Cài đặt.' };
+      return this.save(this.startPlanner(p, null, setup, gameScan));
+    }
+    p.note = `Đang tra bản đồ code: ${keywords.join(', ')}…`;
+    this.save(p);
+    void this.planWithGraph(p.id, keywords, source);
+    return p;
+  }
+
+  /**
+   * A pipeline that failed or was cancelled before any step ran (e.g. the planner hit the usage limit): plan it again
+   * from scratch in a new session, same request and options. The previous plan, checks and critiques are dropped;
+   * their tasks stay in planTasks so the cost still counts them.
+   */
+  restartPlan(id: string): Pipeline {
+    const p = this.must(id);
+    if (!['failed', 'cancelled'].includes(p.status)) throw new BadPipeline('Chỉ lập kế hoạch lại được khi chuỗi đã lỗi hoặc đã huỷ');
+    if (p.steps.some(s => s.taskId)) throw new BadPipeline('Chuỗi đã chạy bước, không lập kế hoạch lại từ đầu được. Dùng "Lập lại kế hoạch" cho các bước còn lại.');
+    const { setup, scan } = this.planGates();
+    const old = [p.planTaskId, ...(p.planTasks ?? []), p.critiqueTaskId, ...(p.critiques ?? []).flatMap(c => [c.planTaskId, c.taskId])];
+    Object.assign(p, {
+      status: 'planning', planTaskId: null, planTasks: [...new Set(old.filter((x): x is string => !!x))], sessionId: null,
+      steps: [], summary: null, error: null, note: null, endedAt: null, critiqueTaskId: null, critiques: [], checkpoint: null,
+      issues: [], planType: null, planTypeTitle: null, slug: null, omitted: [], edited: false, replans: 0, replanning: false, graph: null,
+    } satisfies Partial<Pipeline>);
+    return this.plan(p, setup, scan?.summary ?? null);
+  }
+
+  /** Creates the first planner task (with the code map lookup, if any) and records it on the pipeline (not saved). */
+  private startPlanner(p: Pipeline, codeMap: { keywords: string[]; text: string } | null, setup = this.setup(), gameScan: string | null = this.d.scan?.().summary ?? null): Pipeline {
+    const t = this.d.queue.create({ kind: 'prompt', prompt: plannerPrompt(p.request, this.d.skills(), p.rigor, setup, gameScan, this.templates(), codeMap, this.roles(), p.roles ?? null), permissionMode: 'default', ...(p.model ? { model: p.model } : {}) });
+    p.planTaskId = t.id; p.planTasks = [...(p.planTasks ?? []), t.id];
+    return p;
+  }
+
+  /** Runs the code map lookup in the background, then starts the planner. A lookup failure never blocks planning. */
+  private async planWithGraph(id: string, keywords: string[], source: 'user' | 'request') {
+    let ctx: GraphContext;
+    try {
+      ctx = !keywords.length ? { status: 'unavailable', text: null, detail: 'Không có từ khoá mã nguồn.' }
+        : !this.d.graph ? { status: 'unavailable', text: null, detail: 'Studio chưa có module bản đồ code.' }
+        : await this.d.graph.context(keywords);
+    } catch (e) { ctx = { status: 'error', text: null, detail: `Tra bản đồ code lỗi: ${(e as Error).message}` }; }
+    const p = this.get(id);
+    if (!p || p.status !== 'planning' || p.planTaskId) return; // cancelled meanwhile, or already started
+    const g: PipelineGraphContext = { status: ctx.status, keywords, source, detail: ctx.detail, chars: ctx.text?.length ?? 0 };
+    p.graph = g; p.note = null;
+    if (ctx.status !== 'used') this.bus.emit('log', 'warn', `Lập kế hoạch không dùng bản đồ code: ${ctx.detail}`);
+    try {
+      this.save(this.startPlanner(p, ctx.status === 'used' && ctx.text ? { keywords, text: ctx.text } : null));
+    } catch (e) {
+      p.status = 'failed'; p.error = `Không tạo được task lập kế hoạch: ${(e as Error).message}`; p.endedAt = new Date().toISOString();
+      this.save(p);
+    }
   }
 
   /** Edit the plan: steps already run are kept as they are, the rest is replaced. */
@@ -392,6 +526,19 @@ export class PipelineService {
     return p;
   }
 
+  /**
+   * "Xoá kế hoạch": removes a plan the user no longer needs. Only when nothing of it runs (cancel first).
+   * The tasks it ran stay in the Task Center (log, cost); nothing in the project changes.
+   */
+  remove(id: string): { id: string } {
+    const p = this.must(id);
+    if (['planning', 'critiquing', 'running'].includes(p.status)) throw new BadPipeline('Chuỗi đang chạy. Bấm "Huỷ chuỗi" trước rồi mới xoá.');
+    this.d.db.$client.prepare('DELETE FROM pipelines WHERE id = ?').run(id);
+    this.bus.emit('removed', id);
+    this.bus.emit('log', 'info', `Đã xoá kế hoạch "${cut(p.request, 60)}".`);
+    return { id };
+  }
+
   /** The file the plan template expects this step to produce, when the template names one. */
   private outputOf(p: Pipeline, s: PipelineStep): { rel: string; exists: boolean } | null {
     const root = this.d.project ? this.d.project() : null;
@@ -407,7 +554,7 @@ export class PipelineService {
     if (!['paused', 'failed', 'review'].includes(p.status) || !p.steps.some(s => s.status !== 'pending')) throw new BadPipeline('Chỉ lập lại kế hoạch được khi chuỗi đã chạy ít nhất một bước và đang dừng');
     if (!p.sessionId) throw new BadPipeline('Chuỗi chưa có session để lập lại kế hoạch');
     const text = typeof note === 'string' && note.trim() ? cut(note.trim(), 2000) : null;
-    const t = this.d.queue.create({ kind: 'prompt', prompt: replanPrompt(p, text, this.templates()), resumeOf: p.sessionId, permissionMode: 'default', ...(p.model ? { model: p.model } : {}) });
+    const t = this.d.queue.create({ kind: 'prompt', prompt: replanPrompt(p, text, this.templates(), this.roles()), resumeOf: p.sessionId, permissionMode: 'default', ...(p.model ? { model: p.model } : {}) });
     p.replans = (p.replans ?? 0) + 1; p.replanning = true;
     p.planTaskId = t.id; (p.planTasks ??= []).push(t.id); p.status = 'planning'; p.error = null; p.endedAt = null;
     p.note = `Đang lập lại kế hoạch cho các bước còn lại (lần ${p.replans}).`;
@@ -459,6 +606,7 @@ export class PipelineService {
 
   private planDone(p: Pipeline, t: Task) {
     if (t.sessionId) p.sessionId = t.sessionId;
+    if (p.graph?.mcp && t.mcp?.calls) p.graph = { ...p.graph, mcpCalls: t.mcp.calls.graphify ?? 0 };
     // A revision (after a critique) or a re-plan: on failure the plan there was stays.
     const revision = p.steps.length > 0;
     let failure: string | null = null;
@@ -507,7 +655,7 @@ export class PipelineService {
     const round: CritiqueRound = { round: rounds.length + 1, planTaskId: p.planTaskId, taskId: null, ok: null, issues: [], error: null, revised: false, epoch: p.replans ?? 0 };
     rounds.push(round);
     try {
-      const t = this.d.queue.create({ kind: 'prompt', prompt: criticPrompt(p, round.round, this.templates()), permissionMode: 'default', ...(p.model ? { model: p.model } : {}) });
+      const t = this.d.queue.create({ kind: 'prompt', prompt: criticPrompt(p, round.round, this.templates(), this.roles()), permissionMode: 'default', ...(p.model ? { model: p.model } : {}) });
       round.taskId = t.id; p.critiqueTaskId = t.id; p.status = 'critiquing';
       p.note = `Đang phản biện kế hoạch (vòng ${round.round}).`;
       this.save(p);
@@ -637,6 +785,12 @@ export class PipelineService {
   /** After a restart: running steps whose task died with the old process need the user's decision. */
   recover() {
     for (const p of this.list(200)) {
+      // Server stopped during the code map lookup: do it again.
+      if (p.status === 'planning' && !p.planTaskId && !(p.planTasks ?? []).length) {
+        const kw = p.graph?.keywords ?? (p.codeKeywords?.length ? p.codeKeywords : keywordsFromRequest(p.request));
+        void this.planWithGraph(p.id, kw, p.codeKeywords?.length ? 'user' : 'request');
+        continue;
+      }
       const ids = p.status === 'planning' ? [p.planTaskId] : p.status === 'critiquing' ? [p.critiqueTaskId ?? null]
         : p.status === 'running' ? p.steps.filter(s => s.status === 'running').map(s => s.taskId) : [];
       for (const id of ids) {

@@ -10,8 +10,8 @@ import { unifiedDiff } from '../src/monitor/diff';
 import { configureRedaction, redactString, REDACTED } from '../src/monitor/redact';
 import { DEFAULT_SETTINGS, mergeSettings } from '../src/settings/settings.service';
 import { openDb } from '../src/store/db';
-import { TaskQueue } from '../src/tasks/task-queue';
-import type { RunHooks, RunOutcome, Runner } from '../src/tasks/runner';
+import { TaskQueue, splitCost } from '../src/tasks/task-queue';
+import type { RunHooks, RunOptions, RunOutcome, Runner } from '../src/tasks/runner';
 import { baseRef, gitInfo, takeSnapshot, diffSnapshots, taskDiffs } from '../src/tasks/git-snapshot';
 import { encodeTraces, sessionSpans } from '../src/phoenix/otlp';
 
@@ -197,11 +197,11 @@ describe('S-03 / S-04 / S-05 settings', () => {
 
 // ---------- tasks ----------
 function fakeRunner() {
-  const runs = new Map<string, { task: Task; finish: (o: Partial<RunOutcome>) => void; stopped: boolean }>();
-  const runner: Runner = (task: Task, hooks: RunHooks) => {
+  const runs = new Map<string, { task: Task; finish: (o: Partial<RunOutcome>) => void; stopped: boolean; opts?: RunOptions }>();
+  const runner: Runner = (task: Task, hooks: RunHooks, opts?: RunOptions) => {
     let finish!: (o: Partial<RunOutcome>) => void;
     const done = new Promise<RunOutcome>(r => { finish = o => r({ ok: true, sessionId: `s-${task.id}`, resultText: 'xong', error: null, ...o }); });
-    const rec = { task, finish, stopped: false };
+    const rec = { task, finish, stopped: false, opts };
     runs.set(task.id, rec);
     hooks.onSession(`s-${task.id}`);
     return { done, pid: () => null, stop: async () => { rec.stopped = true; finish({ ok: false, error: 'error_during_execution' }); } };
@@ -234,6 +234,38 @@ describe('S-03 task defaults, T-TC-07 resume, M-PF-03 cost', () => {
     expect(f.runs.get(b.id)!.task.resumeOf).toBe(`s-${a.id}`);
     expect(() => q.create({ kind: 'prompt', prompt: 'x', resumeOf: 'không hợp lệ!' })).toThrow();
     expect(() => q.create({ kind: 'prompt', prompt: 'x', resumeOf: '99999999' })).toThrow(/Không có session/);
+  });
+
+  it('splits the SDK running session total into the /compact before the task and the task itself', () => {
+    expect(splitCost(0, 0.7, null)).toEqual({ costUsd: 0.7, compactCostUsd: null, sessionCostUsd: 0.7 });
+    expect(splitCost(0.7, 1.3, 0.9)).toEqual({ costUsd: expect.closeTo(0.4), compactCostUsd: expect.closeTo(0.2), sessionCostUsd: 1.3 });
+    expect(splitCost(0.8, 0.2, null).costUsd).toBe(0.2); // total not restored on resume
+    expect(splitCost(null, 1.3, 0.9)).toMatchObject({ costUsd: expect.closeTo(0.4), compactCostUsd: null });
+    expect(splitCost(null, 1.3, null).costUsd).toBeNull();
+    expect(splitCost(0, null, null)).toEqual({ costUsd: null, compactCostUsd: null, sessionCostUsd: null });
+  });
+
+  it('compacts only right before resuming a session whose last context reached the threshold', async () => {
+    const f = fakeRunner();
+    const q = new TaskQueue({ db: openDb(':memory:'), runner: f.runner, project: () => tmp, snapshot: async () => null, sessionExists: () => true,
+      defaults: () => ({ model: null, permissionMode: 'default', maxRuntimeMin: null, compactAfter: true, compactMinTokens: 50_000 }) });
+    const a = q.create({ kind: 'prompt', prompt: 'lập kế hoạch' });
+    await tick();
+    expect(f.runs.get(a.id)!.opts?.compactFirst).toBe(false); // new session: nothing to compact
+    f.runs.get(a.id)!.finish({ costUsd: 0.71, contextTokens: 60_000 });
+    await tick();
+    expect(q.get(a.id)).toMatchObject({ costUsd: 0.71, compactCostUsd: null, sessionCostUsd: 0.71, contextTokens: 60_000 });
+
+    const b = q.resume(a.id, 'bước 1');
+    await tick();
+    expect(f.runs.get(b.id)!.opts?.compactFirst).toBe(true); // 60k >= 50k
+    f.runs.get(b.id)!.finish({ sessionId: `s-${a.id}`, compactTotalUsd: 0.9, costUsd: 1.3, contextTokens: 30_000 });
+    await tick();
+    expect(q.get(b.id)).toMatchObject({ compactCostUsd: expect.closeTo(0.19), costUsd: expect.closeTo(0.4), sessionCostUsd: 1.3 });
+
+    const c = q.resume(b.id, 'bước 2');
+    await tick();
+    expect(f.runs.get(c.id)!.opts?.compactFirst).toBe(false); // 30k < 50k
   });
 
   it('stops a task that runs past the max runtime and marks it failed', async () => {

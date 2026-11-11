@@ -28,6 +28,8 @@ export function useTaskData() {
 const title = (t: Task) => (t.kind === 'skill' ? t.prompt : t.prompt.length > 90 ? t.prompt.slice(0, 90) + '…' : t.prompt);
 const MODES: [PermissionMode, string][] = [['default', 'Hỏi trước khi sửa'], ['acceptEdits', 'Tự sửa file'], ['plan', 'Chỉ lập kế hoạch']];
 const CHANGE: Record<string, string> = { A: 'Tạo', M: 'Sửa', D: 'Xoá', R: 'Đổi tên' };
+/** A question that asks to approve content (then the content should have been written before it). */
+const APPROVE_RE = /đúng chưa|ổn chưa|được chưa|duyệt|phê duyệt|approve|look(s)? (good|right)|is (this|it|the .+) (right|correct|ok)/i;
 
 export function QuestionBox({ it, onDone }: { it: PendingInteraction; onDone: () => void }) {
   const qs = it.question?.questions ?? [];
@@ -53,11 +55,22 @@ export function QuestionBox({ it, onDone }: { it: PendingInteraction; onDone: ()
     catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
 
+  const draft = it.context?.trim() ?? '';
+  // Claude asks to approve something it never showed (it.context === "" means it wrote nothing since its last question).
+  const noDraft = it.context !== undefined && !draft && qs.some(q => APPROVE_RE.test(`${q.question} ${q.header ?? ''}`));
+
   return (
     <div className="question stack">
+      {draft && (
+        <details open={draft.length <= 3000}>
+          <summary className="small"><b>Claude viết trước câu hỏi</b> (bản nháp cần duyệt){draft.length > 3000 ? ', bấm để mở' : ''}</summary>
+          <pre className="md" style={{ marginTop: 8, maxHeight: 420, overflowY: 'auto' }}>{draft}</pre>
+        </details>
+      )}
+      {noDraft && <div className="badge-err" style={{ alignSelf: 'flex-start' }}>Claude chưa đưa bản nháp trước câu hỏi này. Chọn "Câu trả lời khác" và nhờ Claude in bản nháp ra rồi hỏi lại.</div>}
       {qs.map(q => (
         <div key={q.question} className="stack" style={{ gap: 8 }}>
-          <h3 style={{ margin: 0 }}>Claude hỏi: {q.question}</h3>
+          <h3 style={{ margin: 0, whiteSpace: 'pre-wrap' }}>Claude hỏi: {q.question}</h3>
           {q.header && <div className="muted small">{q.header}{q.multiSelect ? ', chọn được nhiều' : ''}</div>}
           <div className="opt-list">
             {q.options.map(o => (
@@ -178,7 +191,8 @@ function Result({ t }: { t: Task }) {
   return (
     <div className="stack">
       {t.error && <div className="badge-err">{t.error}</div>}
-      <div className="small muted">Model {t.model ?? 'mặc định'} · Chi phí {fmtUsd(t.costUsd)}{t.costUsd !== null ? ' (ước tính theo giá niêm yết, do SDK báo)' : ''}{t.resumeOf ? ` · Tiếp tục session ${t.resumeOf.slice(0, 8)}` : ''}</div>
+      <div className="small muted">Model {t.model ?? 'mặc định'} · Chi phí {fmtUsd(t.costUsd)}{t.costUsd !== null ? ' (ước tính theo giá niêm yết, do SDK báo)' : ''}{t.compactCostUsd != null ? ` · /compact trước task ${fmtUsd(t.compactCostUsd)}` : ''}{t.resumeOf ? ` · Tiếp tục session ${t.resumeOf.slice(0, 8)}` : ''}</div>
+      <TaskCodeMap t={t} />
       <div><div className="muted small">Phản hồi cuối</div><pre className="md" style={{ margin: '4px 0 0' }}>{t.resultText ?? (t.status === 'cancelled' ? 'Task bị dừng trước khi trả lời.' : 'Unknown')}</pre></div>
       <div><div className="muted small">File đã thay đổi</div>
         {t.changedFiles === null ? <div className="small">Unknown (project không phải git repo hoặc không đọc được git status)</div>
@@ -327,4 +341,16 @@ export function Tasks() {
       </div>
     </>
   );
+}
+
+/** Whether the task had the graphify MCP server, and how many times Claude queried it (counted when the task ended). */
+function TaskCodeMap({ t }: { t: Task }) {
+  const m = t.mcp;
+  if (!m) return null;
+  const on = m.servers.includes('graphify');
+  const n = m.calls?.graphify;
+  const text = !on ? `Bản đồ code: không gắn${m.note ? ` (${m.note.replace(/\.$/, '')})` : ''}.`
+    : n == null ? 'Bản đồ code: có gắn, Claude tự tra được (đếm số lần tra khi task xong).'
+    : n ? `Bản đồ code: Claude đã tra ${n} lần (kể cả subagent).` : 'Bản đồ code: có gắn nhưng Claude không tra.';
+  return <div className="small muted">{text}</div>;
 }

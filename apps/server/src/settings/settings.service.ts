@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { StudioSettings } from '@ccgs/shared';
+import { DEFAULT_GRAPH_SETTINGS, cleanExclude } from '../graph/graph-core';
 
 export const DEFAULT_SETTINGS = (): StudioSettings => ({
   projectPath: process.env.CCGS_PROJECT ?? null,
@@ -14,6 +15,7 @@ export const DEFAULT_SETTINGS = (): StudioSettings => ({
   recentProjects: [],
   phoenix: { enabled: false, endpoint: 'http://127.0.0.1:6006/v1/traces' },
   autoAllow: [],
+  graphify: DEFAULT_GRAPH_SETTINGS(),
 });
 
 const TOOL_RE = /^(\*|[A-Za-z0-9_.:-]{1,128})$/;
@@ -33,6 +35,11 @@ export function mergeSettings(cur: StudioSettings, b: any): StudioSettings {
       out.taskDefaults.permissionMode = d.permissionMode;
     }
     if ('compactAfter' in d) out.taskDefaults.compactAfter = d.compactAfter !== false;
+    if ('compactMinTokens' in d) {
+      const n = d.compactMinTokens === null || d.compactMinTokens === '' ? null : Number(d.compactMinTokens);
+      if (n !== null && (!Number.isInteger(n) || n < 10_000 || n > 1_000_000)) throw new BadSettings('Ngưỡng /compact phải là số nguyên từ 10000 đến 1000000 token');
+      out.taskDefaults.compactMinTokens = n;
+    }
     if ('maxRuntimeMin' in d) {
       const n = d.maxRuntimeMin === null || d.maxRuntimeMin === '' ? null : Number(d.maxRuntimeMin);
       if (n !== null && (!Number.isFinite(n) || n < 1 || n > 24 * 60)) throw new BadSettings('Thời gian chạy tối đa phải từ 1 đến 1440 phút');
@@ -65,6 +72,28 @@ export function mergeSettings(cur: StudioSettings, b: any): StudioSettings {
     for (const t of tools) if (!TOOL_RE.test(t)) throw new BadSettings(`Tên công cụ không hợp lệ: "${t}"`);
     out.autoAllow = tools;
   }
+  if (b.graphify && typeof b.graphify === 'object') {
+    const g = b.graphify;
+    const cur = out.graphify ?? DEFAULT_GRAPH_SETTINGS();
+    const next = { ...DEFAULT_GRAPH_SETTINGS(), ...cur, projects: { ...(cur.projects ?? {}) } };
+    if ('enabled' in g) next.enabled = g.enabled !== false;
+    if ('budget' in g) {
+      const n = Number(g.budget);
+      if (!Number.isInteger(n) || n < 200 || n > 20_000) throw new BadSettings('Budget truy vấn bản đồ code phải là số nguyên từ 200 đến 20000');
+      next.budget = n;
+    }
+    if (g.projects && typeof g.projects === 'object') {
+      for (const [id, v] of Object.entries(g.projects as Record<string, any>)) {
+        if (!/^[0-9a-f]{16}$/.test(id)) throw new BadSettings(`Mã project không hợp lệ: "${id}"`);
+        const raw: unknown[] = Array.isArray(v?.excludes) ? v.excludes : [];
+        let excludes: string[];
+        try { excludes = [...new Set(raw.map(x => String(x)).filter(x => x.trim()).map(cleanExclude))]; } catch (e) { throw new BadSettings((e as Error).message); }
+        if (excludes.length > 200) throw new BadSettings('Tối đa 200 mục loại trừ cho một project');
+        next.projects[id] = { excludes, includePlugins: !!v?.includePlugins };
+      }
+    }
+    out.graphify = next;
+  }
   if (b.phoenix) {
     if ('enabled' in b.phoenix) out.phoenix.enabled = !!b.phoenix.enabled;
     if ('endpoint' in b.phoenix) {
@@ -93,6 +122,7 @@ export class SettingsService {
         taskDefaults: { ...d.taskDefaults, ...(j.taskDefaults ?? {}) },
         retention: { ...d.retention, ...(j.retention ?? {}) },
         phoenix: { ...d.phoenix, ...(j.phoenix ?? {}) },
+        graphify: { ...d.graphify!, ...(j.graphify ?? {}), projects: { ...(j.graphify?.projects ?? {}) } },
         redactPatterns: Array.isArray(j.redactPatterns) ? j.redactPatterns : [],
         recentProjects: Array.isArray(j.recentProjects) ? j.recentProjects : [],
         autoAllow: Array.isArray(j.autoAllow) ? j.autoAllow.filter((x: unknown) => typeof x === 'string' && TOOL_RE.test(x)) : [],

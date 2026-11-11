@@ -7,6 +7,8 @@ import { SettingsService } from '../settings/settings.service';
 import { MonitorService } from '../monitor/monitor.service';
 import { HashMismatch, HookInstaller } from './hook-installer';
 import { claudeVersion, projectInfo } from '../system/system.controller';
+import { GraphService } from '../graph/graph.service';
+import { unityMcpCheck } from '../system/unity-mcp';
 
 type Action = 'install' | 'uninstall';
 const asAction = (a: unknown): Action => {
@@ -20,6 +22,7 @@ export class HooksController {
     private readonly settings: SettingsService,
     private readonly installer: HookInstaller,
     private readonly monitor: MonitorService,
+    private readonly graph: GraphService,
   ) {}
 
   private project(): string {
@@ -87,6 +90,10 @@ export class HooksController {
       checks.push({ id: 'db', label: 'Database ghi được', ok, detail: c.name });
     } catch (e) {
       checks.push({ id: 'db', label: 'Database ghi được', ok: false, detail: (e as Error).message });
+    }
+    checks.push(await unityMcpCheck(pi.valid ? pi.path! : null));
+    try { checks.push(await this.graph.doctor()); } catch (e) {
+      checks.push({ id: 'graphify', label: 'graphify (bản đồ code, không bắt buộc)', ok: false, detail: (e as Error).message });
     }
     return checks;
   }

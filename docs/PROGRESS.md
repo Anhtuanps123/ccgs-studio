@@ -1,6 +1,6 @@
 # CCGS Studio: tiến độ và việc tiếp theo
 
-Cập nhật: 2026-11-10. Agent nhận việc: **đọc hết file này trước khi sửa code**, rồi đọc thêm `docs/brief.md` (§3 Nguyên tắc, §10 Quy tắc làm việc).
+Cập nhật: 2026-11-11 (graphify Bước 1). Agent nhận việc: **đọc hết file này trước khi sửa code**, rồi đọc thêm `docs/brief.md` (§3 Nguyên tắc, §10 Quy tắc làm việc).
 
 ## 1. Studio là gì (tóm tắt)
 
@@ -26,7 +26,7 @@ Project đang dùng thử: **Meodoku** (Unity 6000.0.81f1), ở máy công ty n�
 ```
 npm install
 npm run build          # shared -> server -> web
-npm test               # vitest ở apps/server, hiện 76/76 pass
+npm test               # vitest ở apps/server, hiện 134/134 pass
 npm start              # http://127.0.0.1:4310
 ```
 
@@ -50,6 +50,11 @@ npm start              # http://127.0.0.1:4310
 | Plugin `studio` | Skill `studio:unity-art-context`: đọc sprite, màu, font thật qua Unity MCP rồi ghi `design/art-context/<slug>.md` | `apps/server/plugin/`, `src/studio-plugin.ts` |
 | **Đầu não P2: vòng phản biện** | Sau mỗi bản kế hoạch, agent `producer` soát (chỉ đọc, session riêng). Có lỗi thì planner sửa trong session của nó, tối đa 2 lần. Ý kiến phản biện không chặn chạy | Mục 5 |
 | **Đầu não P3: điểm kiểm tra + lập lại kế hoạch** | Sau mỗi bước, luật code đọc verdict, file đổi và câu hỏi cuối để quyết định chạy tiếp, tự sửa 1 lần hoặc dừng. Người dùng có thể trả lời Claude, hoặc lập lại kế hoạch cho các bước còn lại | Mục 5 |
+| Câu hỏi dễ đọc (2026-11-11) | Mọi task nhận `ASK_STYLE_HINT` trong system prompt (main + subagent, đứng trước `CODE_TOOLS_HINT`): in bản nháp trước rồi mới hỏi duyệt, nháp dạng gạch đầu dòng hoặc bảng, câu hỏi 1–2 câu. `AskContext` trong runner gắn `PendingInteraction.context` (chữ Claude viết từ câu hỏi trước). Thẻ hỏi hiện bản nháp đó; nếu hỏi duyệt mà không viết gì thì báo "Claude chưa đưa bản nháp". Session resume vẫn giữ system prompt cũ | `src/tasks/runner.ts`, `test/ask-context.test.ts`, `apps/web/src/views/Tasks.tsx` |
+| Chọn vai trò khi lập kế hoạch (2026-11-11) | Form "Yêu cầu mới" có ô tick vai trò: Designer, UI/UX, Art, Developer, Tester (`plugin/plan-roles.yaml`, mặc định tick hết). Planner chỉ lên bước cho vai trò được chọn. Kiểm luật P1 không đòi bước bắt buộc của vai trò bỏ tick (chỉ ghi info), bước thuộc vai trò bỏ tick thì cảnh báo, và không tự chèn art-context khi bỏ Art. Mỗi bước có nhãn vai trò, sửa tay được. Phản biện và lập lại kế hoạch đều biết các vai trò đã chọn. Không làm việc giao bước cho subagent theo vai trò (người dùng bỏ hẳn): skill CCGS đã tự chọn agent khi chạy, ví dụ `/dev-story` giao cho `ui-programmer` hoặc `gameplay-programmer`. Chưa chạy thử với Claude thật | `plugin/plan-roles.yaml`, `src/pipelines/plan-rules.ts`, `test/plan-roles.test.ts`, `apps/web/src/views/Pipelines.tsx`, api-contract §7 |
+| Lập kế hoạch lại + lỗi hết hạn mức (2026-11-11) | Lúc lập kế hoạch bị hết hạn mức tuần, Claude Code trả `subtype: success` kèm `is_error`, nên trước đây màn hình hiện "Lập kế hoạch lỗi: success". Nay `resultError()` lấy câu Claude trả về làm lỗi, áp cho mọi task. Endpoint `POST /api/pipelines/:id/restart-plan` và nút "Lập kế hoạch lại" dùng cho chuỗi `failed` hoặc `cancelled` chưa chạy bước nào: lập lại từ đầu trong session mới, giữ yêu cầu và tuỳ chọn, chi phí cũ vẫn được tính. `create` và `restartPlan` dùng chung `planGates()` và `plan()`. Test 127/127. **Cần restart server** | `src/tasks/runner.ts`, `pipeline.service.ts`, `test/runner-result.test.ts`, `Pipelines.tsx`, api-contract §8 |
+| Màn Cài package + script cài lần đầu (2026-11-11) | Màn **Hệ thống → Cài package** (`/setup`) kiểm tra Node, Claude Code, đăng nhập, MCP for Unity, Git, VS Build Tools, uv, graphify, có nút Cài / Cài lại (lệnh cố định trong server, một lệnh một lúc, log trực tiếp, nút Huỷ) và nút mở terminal để `/login`. `cai-dat.cmd` (gọi `cai-dat.ps1`) cài Node 24.21.0 bằng winget nếu chưa có, chạy `npm install` rồi `npm start` và mở `/setup`. Đã chạy phần kiểm tra trên máy công ty (đủ cả). **Chưa thử bấm cài thật trên máy trống.** Test 134/134. **Cần restart server** | `src/system/packages.ts`, `setup.controller.ts`, `test/setup-packages.test.ts`, `views/Setup.tsx`, `cai-dat.cmd`, `cai-dat.ps1`, api-contract §9 |
+| File cài đặt (2026-11-11) | `CAI-DAT.md` ở gốc repo liệt kê thứ cần cài, chia 3 mức: bắt buộc (Windows, Node, Claude Code đã đăng nhập, project CCGS đã chạy /start, Unity Editor + MCP for Unity vì lập kế hoạch cần quét game), nên có (Git, Build Tools), tuỳ chọn (graphify, Phoenix). Phiên bản lấy từ máy công ty | `CAI-DAT.md` |
 | **Đầu não P1: chuẩn kế hoạch** | Có 6 mẫu kế hoạch. Server kiểm luật bằng code (thiếu bước, sai thứ tự, art trước UI, dev-story sau create-stories), tự sửa những chỗ an toàn, lỗi thì chặn "Duyệt và chạy". Người dùng sửa tay thì lỗi chỉ còn là cảnh báo | Mục 5 |
 
 ## 5. Đầu não (hướng chính đang làm)
@@ -176,17 +181,100 @@ npm start              # http://127.0.0.1:4310
 - **Bước 0 xong** (2026-11-10). Báo cáo: `docs/graphify-phase-0-report.md`. Script thử: `spikes/graphify/`. **Chưa sửa code ứng dụng.**
   - Cách dựng ngoài project: `GRAPHIFY_OUT` = `~/.ccgs-studio/projects/<id>/graphify`, `GRAPHIFY_BACKEND=none`, `graphify update <project>`. Danh sách loại trừ ghi vào `<out>/.graphify_build.json`, vì `update` bản 0.9.103 không có `--exclude`. Đã xác nhận `git status` của Meodoku không đổi.
   - graphify 0.9.103 đã được cài lại kèm `[mcp]`; bản trước thiếu, nên `graphify-mcp` chết ngay khi chạy. Claude gọi được `query_graph` qua `mcpServers` của SDK.
-- **Đang chờ người dùng quyết (báo cáo §7):**
-  - Mục tiêu đo: planner thật ra chỉ gọi khoảng 4 tool, chi phí nằm ở ngữ cảnh cố định; con số 28–38 tool là của vòng phản biện.
-  - Cách truy vấn sẵn với yêu cầu tiếng Việt: truy vấn bằng tiếng Việt cho kết quả lạc đề.
-  - Danh sách loại trừ mặc định.
-  - 2 yêu cầu mẫu để đo mốc.
-- **Bước 1–3: chưa làm.** Làm lần lượt, dừng sau mỗi bước.
+- **Bước 0 hoàn tất, đã chốt quyết định** (2026-11-11, phản hồi `PHAN_HOI_BUOC_0_GRAPHIFY.md`; brief đã cập nhật theo đó):
+  1. Mục tiêu graphify = **chất lượng phân tích** (ref đúng file:dòng, rootCause qua `affected`/`explain`), không phải giảm chi phí planner. Nghiệm thu Bước 2: chi phí phân tích không tăng quá khoảng 15% so với mốc; mọi `ref` có thật; `rootCause` đúng (đối chiếu tay).
+  2. Truy vấn sẵn chỉ khi có định danh PascalCase/camelCase, hoặc ô "Từ khoá mã nguồn (không bắt buộc)" ở form tạo chuỗi (ưu tiên). Không có thì bỏ qua, MCP vẫn gắn.
+  3. Loại trừ mặc định = A3 + `*.slnx`, `.claude/`, `.agents/` cho mọi project. Thư viện bên thứ ba: ô loại trừ thêm theo project trong Cài đặt (Meodoku: `spikes/graphify/excludes-final.json`), không hard-code.
+  4. Mốc mới (opus, tắt phản biện, **Unity MCP không kết nối**): tính năng PiggyBank **$0,84** (9 tool), lỗi Daily Login ngày 7 **$0,54** (4 tool). Yêu cầu lỗi gốc ("nhận 2 lần") không khớp code nên đã đổi sang tình huống có thật gần nhất. Chi tiết: báo cáo §10.
+- **Phản biện sau sửa P2 đã đo lại:** 1 vòng = **$0,45, 7 tool, không Agent** (trước $1,03–1,13, 28–38 tool). Báo cáo §10.
+- **Chi phí task bị đếm trùng (đã sửa 2026-11-11):** `total_cost_usd` của SDK luỹ kế theo session khi resume; `$1,81` của revise thật ra khoảng $0,51. Nay `costUsd` = phần chênh so với task trước cùng session, `compactCostUsd` ghi riêng (`splitCost` trong `task-queue.ts`, cột DB mới, hợp đồng §5). Tổng chi phí các chuỗi cũ trong DB vẫn sai (không chuyển đổi). Báo cáo §9. **Cần restart server** để nạp bản sửa.
+- **Compact lúc cần (2026-11-11, người dùng chọn):** bỏ `/compact` sau mỗi task. Hàng đợi chỉ compact ngay trước khi resume một session có ngữ cảnh lượt cuối ≥ ngưỡng (`compactMinTokens`, mặc định 100k; ngữ cảnh cố định đã khoảng 55–70k). Session không ai resume (bước cuối, phản biện, task lẻ) và session nhỏ không bị compact. Runner ghi `contextTokens` mỗi task; chi phí compact ghi vào `compactCostUsd` của task được chạy sau đó. Cài đặt có ô ngưỡng. Test 79/79. **Chưa đo với Claude thật** so với cách cũ.
+- **Đồ thị chính thức** đang ở `~/.ccgs-studio/projects/91b70652a67e34da/graphify-new` (564 file, 4.844 node, graph.json 6,6 MB). Việc xoá `graphify` cũ, `spike-B`, `spike-C` rồi đổi tên bị bộ lọc an toàn chặn, **người dùng tự làm**.
+- **Việc riêng, làm sau graphify:** 3 đòn bẩy chi phí planner (bỏ Unity MCP khỏi task planner, rút gọn danh sách skill, đổi Sonnet). Đổi lần lượt từng cái để đo được.
+- **Bước 1 xong (2026-11-11), cộng thêm 2 việc của Bước 2 theo người dùng duyệt** (ô "Từ khoá mã nguồn" và tra sẵn cho planner). Chưa đo với Claude thật.
+  - Module `apps/server/src/graph/`:
+    - `graph-core.ts`: hàm thuần (lệnh, biến môi trường, loại trừ, từ khoá, tính `stale`).
+    - `graph.service.ts`:
+      - dựng lại vào `graphify.building` rồi thay thư mục cũ;
+      - tự `update --no-cluster --force` ở nền khi task đổi file code, gộp các yêu cầu, không chặn hàng đợi;
+      - mọi lệnh graphify chạy nối tiếp;
+      - `queryGraph`, `context` (tên trùng thì tra lại bằng `--seed`), `mcpServers` (chưa gắn vào task nào), `doctor`.
+    - `graph.controller.ts`: `GET /api/graph`, `POST /api/graph/build`.
+    - Trạng thái lưu ở `~/.ccgs-studio/projects/<id>/graph-status.json`.
+  - Pipeline:
+    - Có từ khoá (từ ô nhập, hoặc PascalCase/camelCase trong câu yêu cầu) và đồ thị dùng được thì server tra trước, rồi mới tạo task planner. Prompt planner có thêm mục "Code map".
+    - Không có từ khoá, tắt trong Cài đặt, hoặc tra lỗi thì vẫn lập kế hoạch như cũ, và `Pipeline.graph` ghi lý do.
+    - Huỷ giữa lúc tra thì không tạo task. Restart giữa lúc tra thì tra lại.
+  - Giao diện:
+    - Thẻ "Bản đồ code" trên Tổng quan (trạng thái, nút Dựng / Dựng lại).
+    - Cài đặt: bật/tắt, budget, loại trừ thêm theo project, `Assets/Plugins/`.
+    - Kiểm tra môi trường có thêm mục graphify.
+    - Pipelines: ô từ khoá, dòng "Có/Không dùng bản đồ code".
+  - Hợp đồng: `docs/api-contract.md` §6. Test **97/97** (thêm `test/graph.test.ts`, 18 test).
+  - **Chạy thật** với graphify 0.9.103 trên Meodoku (home tạm trong scratchpad, không đụng `~/.ccgs-studio`):
+    - dựng 13,6 s, ra 4.844 node và 11.400 cạnh, khớp đồ thị chính thức;
+    - tra 4 từ khoá 4,7 s, thêm 5.410 ký tự;
+    - `graphify-mcp` trả lời được;
+    - `update` không có thay đổi mất 13,7 s, số cạnh lên 11.493, vì không phân cụm (chưa rõ vì sao số cạnh khác);
+    - `git status` của Meodoku không đổi.
+  - Lỗi đã gặp và sửa: `spawn` báo ENOENT khi `cwd` chưa tồn tại (không phải do thiếu graphify).
+  - **Người dùng cần làm:**
+    1. `npm run build` rồi restart server.
+    2. ~~Cài đặt → Bản đồ code: điền 7 thư mục bên thứ ba~~: **đã ghi thẳng vào `~/.ccgs-studio/config.json`** (project `91b70652a67e34da`). Đừng lưu Cài đặt hay bấm "Luôn cho phép" trên server cũ trước khi restart, kẻo bị ghi đè.
+    3. Tổng quan → "Dựng lại". Thao tác này thay thư mục `graphify` cũ (biến thể A, Studio coi là "không do Studio dựng").
+    4. Tự xoá `graphify-new`, `spike-B`, `spike-C` nếu muốn.
+- **Gắn MCP graphify cho task planner (2026-11-11, người dùng duyệt).** Chưa chạy với Claude thật.
+  - `graph-core.ts`: `graphMcpSession(graph.json)`:
+    - `mcpServers.graphify` có `alwaysLoad: true` để tool có ngay ở lượt đầu, không phải qua tool search; `env` chỉ gồm biến của graphify;
+    - tự cho phép 7 tool chỉ đọc;
+    - bỏ 3 tool PR gọi GitHub (`list_prs`, `get_pr_impact`, `triage_prs`). Danh sách tool lấy từ `tools/list` thật của graphify-mcp 0.9.103.
+  - `graph.service.ts`: `mcpSession()` thay `mcpServers()`, cùng điều kiện với tra sẵn (bật, có graphify, đồ thị `ready`/`stale` do Studio dựng, MCP không lỗi), trả kèm lý do.
+  - `runner.ts`: `RunOptions.extras` (`SessionExtras`) và `extrasOptions()` gộp `mcpServers`/`allowedTools`/`disallowedTools` vào options SDK.
+  - `task-queue.ts`: `setSessionExtras(fn)`, gọi ngay trước khi chạy task. Lỗi chỉ ghi log, task vẫn chạy.
+  - `pipeline.service.ts`:
+    - constructor đăng ký `sessionExtras(t)`. Chỉ task planner của pipeline đang `planning` được gắn (lập đầu, sửa sau phản biện, "Sửa lại", lập lại kế hoạch); phản biện, quét game, các bước và task thường thì không.
+    - Kết quả ghi vào `Pipeline.graph.mcp` / `mcpDetail`.
+    - Prompt planner có thêm `CODE_TOOLS_HINT` khi bản đồ code đang bật: tra graphify trước, Read theo khoảng dòng, không Glob/Grep cả project.
+  - Pipelines: ô `GraphUse` hiện "MCP graphify: có gắn / không gắn" kèm lý do.
+  - Hợp đồng §6 đã cập nhật. Test **102/102** (thêm 5 test trong `graph.test.ts`). tsc server và web sạch.
+  - **Chưa làm:** `maxTurns`. (Gắn MCP cho các bước: đã làm, xem mục "Graphify cho mọi task".)
+- **Nút "Xoá kế hoạch" (2026-11-11, người dùng duyệt):**
+  - `DELETE /api/pipelines/:id` (`PipelineService.remove`): chỉ xoá khi chuỗi không chạy. Đang `planning`/`critiquing`/`running` thì trả 400 "Huỷ chuỗi trước".
+  - Chỉ xoá bản ghi trong bảng `pipelines`. Task đã chạy vẫn ở Task Center (log, chi phí); không đụng project.
+  - WebSocket `pipeline:delete` `{id}`.
+  - Màn Pipelines: nút "Xoá kế hoạch" cạnh "Huỷ chuỗi", có hỏi xác nhận, bị khoá khi đang chạy; xoá xong thì bỏ chọn.
+  - Test **103/103** (thêm 1 test trong `pipelines.test.ts`).
+- **Kiểm tra Unity MCP (2026-11-11, người dùng duyệt):** trước đây doctor không kiểm, phải chạy Quét game (tốn một phiên Claude) mới biết lỗi.
+  - `src/system/unity-mcp.ts` (chỉ đọc, không gọi Claude, không gọi tool Unity nào):
+    - đọc khai báo server Unity theo thứ tự ưu tiên của Claude Code: local (`~/.claude.json` `projects[path]`) > project (`.mcp.json`) > user. Ưu tiên tên `UnityMCP`;
+    - kiểu HTTP và URL trên máy này: gửi MCP `initialize`, rồi đọc resource `mcpforunity://instances` (danh sách Unity Editor đang nối), đóng session. Giới hạn 3 giây;
+    - kết quả: không khai báo, không trả lời, hoặc không có Editor nào nối → `ok: false`; Editor đang nối khác tên thư mục project → `ok: null` (cảnh báo); stdio hoặc URL ngoài máy → `ok: null` (không kiểm).
+  - Doctor có thêm mục "Unity MCP (quét game, art context)".
+  - Nút Quét game (`POST /api/scan` → `startChecked()`): kiểm trước. `ok: false` thì báo lỗi ngay, không tạo task.
+  - Chạy thật: 45 ms, "mcp-for-unity-server 3.4.11. Unity Editor đang nối: Meodoku (6000.0.81f1)".
+  - Test **110/110** (thêm `test/unity-mcp.test.ts`, 7 test, có server MCP giả kiểu JSON và SSE).
+- **Graphify cho mọi task liên quan code (2026-11-11, người dùng duyệt).** Lý do: kế hoạch Lucky Spin có gắn MCP nhưng Claude không tra lần nào (chỉ Glob 1, Grep 2), vì lời dặn chỉ là "nếu có thì tra" và chỉ có ở planner.
+  - Quy tắc người dùng chốt: không bắt tra cho mọi task; nhưng hễ cần tìm hoặc hiểu code thì tra graphify trước, Read đúng đoạn, Grep/Glob chỉ là phương án dự phòng.
+  - `graph-core.ts`: `CODE_TOOLS_HINT` viết lại theo quy tắc trên, chuyển về đây và đi vào `graphMcpSession().systemPrompt`.
+  - `runner.ts`: `SessionExtras.systemPrompt` → SDK `systemPrompt` (chuỗi; mặc định SDK đã là chuỗi rỗng nên chỉ thêm chữ) và `appendSubagentSystemPrompt` (SDK 0.3.319 có đọc nhưng chưa có trong typings); `SessionExtras.note` chỉ để ghi lại.
+  - `pipeline.service.ts`: `sessionExtras` gắn cho **mọi task** (planner, phản biện, các bước, quét game, task chạy tay). Planner còn ghi vào `Pipeline.graph`. Bỏ lời dặn khỏi prompt planner (đã nằm ở system prompt).
+  - `task-queue.ts` + cột `tasks.mcp`: `Task.mcp = {servers, note, calls}`; `calls` đếm từ event `PreToolUse` khi task xong. Thêm index `events(task_id, event_type)`.
+  - Web:
+    - nhãn "Không dùng bản đồ code…" đổi thành "Không tra trước bản đồ code…";
+    - dòng tóm tắt hiện "Claude đã tra bản đồ code N lần" hoặc "Claude không tra";
+    - Task Center (tab Kết quả) có dòng "Bản đồ code: …".
+  - Hợp đồng §6 đã cập nhật. Test **110/110**; tsc server và web sạch.
+  - Giới hạn: subagent của CCGS có khai báo `tools:` riêng sẽ không có tool graphify (không sửa file CCGS). Session cũ được tiếp tục giữ system prompt cũ.
+  - **Chưa chạy với Claude thật.** Đo lại một kế hoạch mẫu (~$0,5–0,7) cần người dùng duyệt.
+- **Bước 2 (phần còn lại) và Bước 3: chưa làm**, chờ duyệt:
+  - JSON `analysis`, luật 6.4, màn duyệt;
+  - `affected` cho yêu cầu lỗi;
+  - đo lại 2 yêu cầu mẫu, khoảng $1,4.
 
 ## 6. Việc còn treo và chờ người dùng quyết
 
 1. **T-AG-05 (sửa agent):** chưa làm, vì tính năng này ghi vào `.claude/agents/`, trái nguyên tắc số 2. Người dùng chọn (a) ngoại lệ có diff và xác nhận, hoặc (b) bỏ. **Chưa có câu trả lời.**
-2. `docs/api-contract.md` **chưa có** endpoint `/api/pipelines/*` (gồm `skip-critique`, `replan`, `answer`) và `/api/scan/*`, cùng kiểu `Pipeline` / `PlanIssue` / `CritiqueRound` / `StepCheck`. Cần bổ sung (brief §10: hợp đồng cập nhật trước, code sau).
+2. `docs/api-contract.md` **chưa có** endpoint `/api/pipelines/*` (gồm `skip-critique`, `replan`, `answer`, `DELETE /api/pipelines/:id`; WebSocket `pipeline:delete`) và `/api/scan/*`, cùng kiểu `Pipeline` / `PlanIssue` / `CritiqueRound` / `StepCheck`. Cần bổ sung (brief §10: hợp đồng cập nhật trước, code sau).
 3. Plugin `studio`, Unity MCP trong task, P1, P2 và P3 **chưa chạy thử với Claude thật**. Phải restart server để nạp plugin và mẫu mới.
 4. **Meodoku:**
    - `project.yaml` và `CLAUDE.md` vẫn ghi Godot, trong khi game là Unity. Một task `/setup-engine` đã được tạo trên máy công ty, chưa rõ kết quả (Unknown).
@@ -211,6 +299,7 @@ apps/server/plugin/
   .claude-plugin/plugin.json  plugin "studio"
   skills/unity-art-context/SKILL.md
   plan-templates/*.yaml
+  plan-roles.yaml              vai trò (Designer, UI/UX, Art, Developer, Tester) và skill của mỗi vai trò
 apps/web/src/views/Pipelines.tsx  màn lập kế hoạch + PlanCheck
 packages/shared/src/index.ts      kiểu dùng chung (Pipeline, PlanIssue, ...)
 ```

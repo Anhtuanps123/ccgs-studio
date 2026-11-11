@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import type { GameScan, Task } from '@ccgs/shared';
+import type { DoctorCheck, GameScan, Task } from '@ccgs/shared';
 import type { TaskQueue } from '../tasks/task-queue';
 
 export const NO_MCP = 'UNITY_MCP_UNAVAILABLE';
@@ -31,7 +31,11 @@ export function scanPrompt(outDir: string): string {
 
 export class GameScanService {
   readonly bus = new EventEmitter<{ scan: [GameScan] }>();
-  constructor(private readonly d: { home: string; queue: TaskQueue; project: () => string | null }) {
+  constructor(private readonly d: {
+    home: string; queue: TaskQueue; project: () => string | null;
+    /** Quick Unity MCP check before a scan (no Claude call); ok === false refuses the scan. */
+    unityCheck?: () => Promise<DoctorCheck>;
+  }) {
     d.queue.bus.on('task', t => this.onTask(t));
   }
   private key() { const p = this.d.project(); return p ? crypto.createHash('sha1').update(path.resolve(p).toLowerCase()).digest('hex').slice(0, 16) : null; }
@@ -78,6 +82,18 @@ export class GameScanService {
     this.save({ status: 'running', taskId: t.id, sessionId: null, at: new Date().toISOString(), summary: null, images: [], error: null, startTaskId: prev?.startTaskId ?? null, startDoneAt: prev?.startDoneAt ?? null });
     return this.get();
   }
+  /**
+   * "Quét game" button: checks Unity MCP first, so a closed Unity Editor is reported at once instead of after a paid
+   * Claude session. Only a definite failure (ok === false) refuses; unknown (stdio, remote) still scans.
+   */
+  async startChecked(): Promise<GameScan> {
+    if (!this.dir()) throw new Error('Chưa chọn project');
+    if (this.get().status === 'running') throw new Error('Đang quét');
+    const c = this.d.unityCheck ? await this.d.unityCheck() : null;
+    if (c?.ok === false) throw new Error(`Chưa quét: Unity MCP không sẵn sàng. ${c.detail}`);
+    return this.start();
+  }
+
   /** /start continuing the scan session, so it already knows the existing game. */
   runStart(): Task {
     const s = this.get();

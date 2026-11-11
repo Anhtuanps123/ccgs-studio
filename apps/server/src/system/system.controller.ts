@@ -25,9 +25,12 @@ export function claudeVersion(cmd: string): Promise<{ version: string | null; er
   });
 }
 
+let versionCache: { cmd: string; v: { version: string | null; error: string | null } } | null = null;
+/** After Claude Code is (re)installed from the setup screen. */
+export function forgetClaudeVersion() { versionCache = null; }
+
 @Controller('api')
 export class SystemController {
-  private versionCache: { cmd: string; v: { version: string | null; error: string | null } } | null = null;
 
   constructor(
     private readonly settings: SettingsService,
@@ -39,13 +42,13 @@ export class SystemController {
 
   @Get('system') async system(): Promise<SystemStatus> {
     const s = this.settings.get();
-    if (!this.versionCache || this.versionCache.cmd !== s.claudeCommand) {
-      this.versionCache = { cmd: s.claudeCommand, v: await claudeVersion(s.claudeCommand) };
+    if (!versionCache || versionCache.cmd !== s.claudeCommand) {
+      versionCache = { cmd: s.claudeCommand, v: await claudeVersion(s.claudeCommand) };
     }
     const hooks = this.adapter.snapshot?.hooks ?? [];
     return {
       project: projectInfo(s.projectPath),
-      claude: { command: s.claudeCommand, ...this.versionCache.v },
+      claude: { command: s.claudeCommand, ...versionCache.v },
       studioHooksInstalled: hooks.some(h => h.owner === 'studio'),
       lastEventAt: this.monitor.lastEventAt,
     };
@@ -88,7 +91,7 @@ export class SystemController {
       throw e;
     }
     const { projectPath: _p, recentProjects: _r, ...patch } = next; // changed only through PUT /api/project
-    this.versionCache = null;
+    versionCache = null;
     return this.settings.update(patch);
   }
 

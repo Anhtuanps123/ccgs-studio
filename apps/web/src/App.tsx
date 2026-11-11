@@ -11,6 +11,7 @@ import { Preferences } from './views/Preferences';
 import { Performance } from './views/Performance';
 import { Pipelines } from './views/Pipelines';
 import { Tasks } from './views/Tasks';
+import { Setup } from './views/Setup';
 import { AgentMonitor, LiveSession, Logs, Timeline, ToolActivity } from './views/Monitor';
 
 function toggleTheme() {
@@ -100,6 +101,7 @@ export function App() {
         <nav className="nav-group" aria-label="Hệ thống">
           <h2>Hệ thống</h2>
           <Item to="/preferences" label="Cài đặt" alert={al["preferences"]} />
+          <Item to="/setup" label="Cài package" />
         </nav>
         <div className="side-foot">
           Claude Code {sys.data?.claude.version ?? 'Unknown'}<br />Backend 127.0.0.1:4310
@@ -126,6 +128,7 @@ export function App() {
               <Route path="/projects" element={<Project onChanged={() => { sys.reload(); sum.reload(); }} />} />
               <Route path="/preferences" element={<Preferences onChanged={sys.reload} />} />
               <Route path="/tasks" element={<Tasks />} />
+              <Route path="/setup" element={<Setup />} />
               <Route path="/pipelines" element={<Pipelines />} />
               <Route path="/live" element={<LiveSession />} />
               <Route path="/agent-monitor" element={<AgentMonitor />} />

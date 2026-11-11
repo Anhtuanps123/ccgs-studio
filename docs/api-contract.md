@@ -43,7 +43,10 @@ interface Task { id: string; kind: 'prompt' | 'skill'; skill: string | null; arg
 interface PendingInteraction { id: string; taskId: string; kind: 'question' | 'permission'; toolUseId: string;
   agentInvocationId: string | null; createdAt: string;
   question?: { questions: { question: string; header?: string; multiSelect: boolean; options: { label: string; description?: string }[] }[] };
-  permission?: { toolName: string; title?: string; inputSummary: string; decisionReason?: string; suggestions?: unknown[] }; }
+  permission?: { toolName: string; title?: string; inputSummary: string; decisionReason?: string; suggestions?: unknown[] };
+  // Chỉ có ở câu hỏi: chữ Claude viết (cùng luồng: main hoặc subagent đó) từ câu hỏi trước đến câu này, tối đa 8000 ký tự cuối.
+  // "" = Claude không viết gì; không có field = không biết.
+  context?: string; }
 interface LogEntry { id: string; timestamp: string; level: 'info' | 'warn' | 'error'; source: 'studio' | 'claude' | 'hook';
   sessionId: string | null; message: string; }
 ```
@@ -104,6 +107,15 @@ Client → server: `subscribe { sessionId }`, `unsubscribe { sessionId }`. Mọi
 
 Kiểu mới trong `packages/shared`: `TaskDefaults`, `RetentionSettings`, `PhoenixSettings` (trong `StudioSettings`), `Task.costUsd`, `Task.baseRef`, `NewTask.resumeOf`, `TokenUsage`, `SessionUsage`, `TranscriptItem`, `ToolCallDetail`, `DiffLine`, `FileActivity`, `TaskDiff`, `TaskStats`, `AgentStats`, `GitInfo`, `PhoenixExport`.
 
+**Chi phí task (sửa 2026-11-11).** `total_cost_usd` của SDK là tổng luỹ kế của cả session (khi resume, SDK nạp lại tổng cũ), và `/compact` chạy sau task cũng cộng vào tổng đó.
+- `Task.costUsd`: chi phí riêng của task = tổng luỹ kế sau task − `sessionCostUsd` của task trước cùng session. `null` khi task resume mà không biết tổng trước đó.
+- `Task.compactCostUsd` (mới, không bắt buộc): chi phí `/compact` chạy **trước** task (trên session được resume), ghi riêng, không gộp vào `costUsd`.
+- `Task.sessionCostUsd` (mới, không bắt buộc): tổng luỹ kế của session sau task; làm mốc cho task resume kế tiếp.
+- `Task.contextTokens` (mới, không bắt buộc): kích thước ngữ cảnh ở lượt cuối của task (input + cache + output).
+
+**Compact lúc cần (2026-11-11).** Không còn `/compact` sau mỗi task. Ngay trước khi một task resume session, nếu `TaskDefaults.compactAfter` bật và `contextTokens` gần nhất của session ≥ `TaskDefaults.compactMinTokens` (mới, không bắt buộc, mặc định 100000, hợp lệ 10000–1000000), runner chạy `/compact` rồi mới chạy task. Không biết kích thước (task cũ) thì compact như trước. `PUT /api/settings` trả 400 khi ngưỡng sai.
+- Tổng chi phí của chuỗi và `TaskStats.totalCostUsd` = Σ(`costUsd` + `compactCostUsd`). Task ghi trước ngày này vẫn giữ số luỹ kế cũ (không chuyển đổi).
+
 | Method | Path | Mô tả | Mã |
 |---|---|---|---|
 | GET | `/api/tasks?status&q&skill&from` | Lọc và tìm task (q tìm trong prompt, kết quả và mã task) | T-TC-08, T-SK-04 |
@@ -123,4 +135,80 @@ Kiểu mới trong `packages/shared`: `TaskDefaults`, `RetentionSettings`, `Phoe
 | GET | `/api/logs?…&from&to` | Thêm lọc theo thời gian | M-LG-03 |
 | POST | `/api/sessions/:id/phoenix` | Gửi trace OTLP/HTTP protobuf tới Phoenix | M-PF-05 |
 
+## 6. Bản đồ code (graphify, Bước 1, 2026-11-11)
+
+Studio gọi graphify từ ngoài project; không cài gì vào project game. Dữ liệu nằm ở `<studio home>/projects/<projectId>/graphify` (`projectId` = sha1 của đường dẫn project viết thường, 16 ký tự, như Quét game). Mọi lệnh chạy với `GRAPHIFY_OUT` trỏ tới đó, `GRAPHIFY_BACKEND=none`, `GRAPHIFY_QUERY_LOG_DISABLE=1`, cwd là thư mục cha của `GRAPHIFY_OUT`. Chỉ dùng `graphify update` và `graphify query`; không dùng `extract`.
+
+Kiểu mới trong `packages/shared`: `GraphSettings`, `GraphProjectSettings` (`StudioSettings.graphify`), `GraphState`, `GraphStatus`, `PipelineGraphContext`, `NewPipeline.codeKeywords`, `Pipeline.codeKeywords`, `Pipeline.graph`.
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | `/api/graph` | `GraphStatus` của project hiện tại |
+| POST | `/api/graph/build` | Dựng lại toàn bộ (có phân cụm) vào thư mục tạm rồi thay thư mục cũ. 409 khi đang dựng hoặc cập nhật; 400 khi chưa có project hay thiếu graphify |
+| POST | `/api/doctor` | Thêm mục `graphify`: phiên bản và `graphify-mcp` trả lời MCP `initialize` (cần đồ thị có sẵn) |
+| POST | `/api/doctor` | Thêm mục `unity-mcp`: server Unity MCP khai báo cho Claude Code (local > `.mcp.json` > user) trả lời MCP `initialize` và có Unity Editor nối vào (`mcpforunity://instances`). `ok: null` khi Editor đang nối khác tên project, khi khai báo kiểu stdio, hoặc URL không nằm trên máy. `POST /api/scan` kiểm như vậy trước, `ok: false` thì trả 400, không tạo task |
+| PUT | `/api/settings` | `graphify.enabled`, `graphify.budget` (200–20000), `graphify.projects[projectId] = {excludes, includePlugins}`. Mục loại trừ là đường dẫn tương đối, không có `..`, không tuyệt đối; 400 khi sai |
+
+WebSocket: `graph:upsert` → `GraphStatus`.
+
+- **Loại trừ:** mặc định `Library/ Temp/ Logs/ obj/ Build/ Builds/ UserSettings/ *.meta *.csproj *.sln *.slnx .claude/ .agents/`, thêm `Assets/Plugins/` trừ khi `includePlugins`, rồi thêm `excludes` của project. Ghi vào `<GRAPHIFY_OUT>/.graphify_build.json` trước mỗi lần chạy (`update` 0.9.103 không có `--exclude`).
+- **Trạng thái:** `missing` (chưa có đồ thị), `building`, `ready`, `stale` (HEAD khác commit lúc dựng, task đã đổi file code mà chưa cập nhật xong, danh sách loại trừ đã đổi, hoặc đồ thị có sẵn mà không do Studio dựng), `error` (lần dựng cuối lỗi). Trạng thái lưu ở `<studio home>/projects/<projectId>/graph-status.json`.
+- **Tự cập nhật:** task kết thúc có `changedFiles` chứa file code (`.cs .js .ts .py …`) → `graphify update --no-cluster --force` ở nền, không chặn hàng đợi; lỗi chỉ ghi log `warn`. Không chạy hai lệnh graphify cùng lúc cho một project; yêu cầu đến khi đang chạy được gộp thành một lần chạy sau.
+- **Tra sẵn cho planner:** khi tạo pipeline, từ khoá lấy từ `codeKeywords` nếu có (tách theo dấu phẩy/khoảng trắng, tối đa 8), nếu không thì tách định danh PascalCase/camelCase trong câu yêu cầu (có chữ thường đứng trước chữ hoa, ví dụ `PiggyBank`, `claimDaily`; tách cả `A.B`; tối đa 6). Không có từ khoá → `graph.status = 'skipped'`. Có từ khoá và đồ thị `ready`/`stale`, đang bật → server chạy `graphify query "<từ khoá>" --budget <budget / số từ khoá, tối thiểu 300>` cho từng từ khoá (mỗi lệnh tối đa 15 giây, cả lượt tối đa 45 giây). Mã 3 (tên trùng) → chạy lại với `--seed` là tối đa 3 node id ứng viên; mã 4 → ghi "không thấy". Kết quả được chèn vào prompt planner thành mục "Code map". Trong lúc tra, pipeline ở `planning` với `planTaskId = null` và `graph = null`.
+- **MCP graphify cho mọi task (A7, brief 6.2; mở rộng 2026-11-11):** ngay trước khi **bất kỳ task nào** chạy (planner, phản biện, các bước của chuỗi, quét game, task chạy tay), server gắn `mcpServers.graphify = {type:'stdio', command:'graphify-mcp', args:[<graph.json>], env:{GRAPHIFY_OUT, GRAPHIFY_BACKEND, GRAPHIFY_QUERY_LOG_DISABLE, GRAPHIFY_NO_TIPS, PYTHONIOENCODING}, alwaysLoad:true}`.
+  - Chỉ gắn khi đang bật, có graphify, đồ thị `ready`/`stale` do Studio dựng (`builtAt` có giá trị), và `graphify-mcp` không báo lỗi. Lỗi khi chuẩn bị MCP không chặn task: task chạy không có MCP.
+  - `allowedTools` = 7 tool chỉ đọc (`mcp__graphify__query_graph`, `get_node`, `get_neighbors`, `get_community`, `god_nodes`, `graph_stats`, `shortest_path`). `disallowedTools` = 3 tool PR gọi GitHub (`list_prs`, `get_pr_impact`, `triage_prs`).
+  - **System prompt** `CODE_TOOLS_HINT` (SDK `systemPrompt` dạng chuỗi, cùng nhánh với mặc định là chuỗi rỗng; thêm `appendSubagentSystemPrompt` cho subagent). Nội dung: khi cần tìm hoặc hiểu code thì tra graphify trước rồi Read đúng khoảng dòng; Grep/Glob chỉ cho code vừa viết, file không phải code, hoặc tìm chuỗi; không bắt tra khi task không đụng code. Không chèn vào prompt của task. SDK ghi lại system prompt theo session: task tiếp tục một session cũ giữ system prompt lúc session bắt đầu.
+  - `Task.mcp: TaskMcp | null` (cột `tasks.mcp`, JSON): `{servers: string[], note: string | null, calls: Record<string, number> | null}`. `servers` rỗng và `note` là lý do khi không gắn. `calls` đếm khi task kết thúc, từ event `PreToolUse` có `task_id` của task (kể cả subagent) và `tool_name` bắt đầu bằng `mcp__<server>__`; `null` khi đang chạy. Task chạy trước thay đổi này có `mcp = null`.
+  - Task planner của pipeline đang `planning` còn ghi vào `Pipeline.graph.mcp` (`true`/`false`), `mcpDetail` (lý do) và `mcpCalls` (số lần gọi tool graphify của lần lập kế hoạch gần nhất; `null` khi đang chạy).
+
 Spool: khi không kết nối được backend, hook ghi body ingest vào `<studio home>/spool.jsonl` (tối đa 50 MB). Server nạp file này lúc khởi động và mỗi 30 giây, rồi xoá.
+
+## 7. Vai trò trong kế hoạch (2026-11-11)
+
+Danh sách vai trò nằm ở `apps/server/plugin/plan-roles.yaml`. Mỗi vai trò có `id`, `title`, `hint` và `skills`; mỗi skill thuộc một vai trò. Nếu thiếu file hoặc file hỏng thì không có vai trò nào: form ẩn ô chọn và không lọc gì.
+
+Kiểu mới trong `packages/shared`: `PlanRoleInfo {id, title, hint, skills}`, `NewPipeline.roles?: string[]`, `Pipeline.roles?: string[] | null`, `PlanStep.role?: string | null`.
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | `/api/pipelines/roles` | `PlanRoleInfo[]` theo thứ tự trong file |
+| POST | `/api/pipelines` | Thêm trường `roles` (không bắt buộc) |
+
+- **`roles` khi tạo chuỗi:** id lạ bị bỏ, id trùng bị gộp. Nếu gửi mảng mà không còn id hợp lệ nào thì trả 400 "Chọn ít nhất một vai trò". Không gửi `roles` thì lưu `null`, nghĩa là mọi vai trò. Chọn hết vai trò cũng không lọc gì.
+- **Prompt planner:** liệt kê các vai trò kèm skill, và các vai trò người dùng đã chọn. Planner chỉ lên bước cho các vai trò đó; bước trong mẫu thuộc vai trò khác thì đưa vào `omitted`. Mỗi bước trả thêm `"role"`. Prompt phản biện và lập lại kế hoạch cũng có danh sách vai trò đã chọn.
+- **`PlanStep.role`:** server giữ giá trị planner hoặc người dùng đưa nếu đó là id hợp lệ. Nếu không, server lấy vai trò của skill (lúc kiểm luật và mỗi lần lưu chuỗi), nên bước story và bước sửa do Studio thêm cũng có vai trò. `PUT /api/pipelines/:id/steps` nhận `role` cho từng bước.
+- **Kiểm luật (`PlanIssue.rule = 'role'`):**
+  - Bước bắt buộc của mẫu thuộc vai trò không chọn thì chỉ là `info` "Bỏ /x: không chọn vai trò Y", không còn `error`.
+  - Bước còn chờ thuộc vai trò không chọn thì là `warn`.
+  - Studio không tự chèn `studio:unity-art-context` khi vai trò Art không được chọn.
+
+## 8. Lập kế hoạch lại và lỗi task (2026-11-11)
+
+| Method | Path | Mô tả |
+|---|---|---|
+| POST | `/api/pipelines/:id/restart-plan` | Lập kế hoạch lại từ đầu, trả `Pipeline` ở trạng thái `planning` |
+
+- **Chỉ dùng được khi:** chuỗi đang `failed` hoặc `cancelled`, và chưa bước nào có task. Trái điều kiện thì trả 400. Nếu đã chạy bước thì dùng `/replan`.
+- **Điều kiện giống lúc tạo chuỗi:** project đã chạy `/start` và đã quét game xong.
+- **Giữ nguyên:** `request`, `mode`, `permissionMode`, `model`, `rigor`, `roles`, `codeKeywords`, `critic`.
+- **Xoá:** kế hoạch cũ (`steps`, `summary`, `issues`, `planType`, `slug`, `omitted`, `edited`), phản biện (`critiques`), `checkpoint`, `replans`, `error`.
+- **Session và bản đồ code:** task planner mới mở session mới (không resume). Bản đồ code được tra lại như khi tạo chuỗi.
+- **Chi phí:** id của task planner và task phản biện cũ được dồn vào `planTasks`, nên chi phí của chuỗi vẫn tính cả chúng.
+
+**`Task.error` khi Claude Code báo lỗi kèm `subtype: "success"`:** ví dụ hết hạn mức ("You've hit your weekly limit · resets …"). Khi đó `error` lấy câu Claude trả về (`result`). Nếu `result` rỗng thì lấy `errors`. Trước đây trường này chỉ ghi chữ `success`. Các `subtype` khác vẫn ghi `<subtype>: <errors>`.
+
+## 9. Cài package (2026-11-11)
+
+Màn **Hệ thống → Cài package** (`/setup`). Lệnh cài cố định trong `apps/server/src/system/packages.ts`; client chỉ gửi `id`, không gửi được lệnh. Mỗi lần chỉ chạy một lệnh cài. Nút cài chỉ có trên Windows.
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | `/api/setup/packages` | `SetupState {platform, packages: SetupPackage[], job: SetupJob \| null}`. Đọc lại PATH từ registry trước khi kiểm tra |
+| POST | `/api/setup/packages/:id/install` | Chạy lệnh cài, trả `SetupJob` (`running`). 400: id lạ, package Studio không tự cài được, hoặc thiếu package cần trước (graphify cần uv). 409: đang cài package khác |
+| POST | `/api/setup/job/cancel` | Dừng lệnh đang chạy (`taskkill /T /F`). 400 khi không có lệnh nào chạy |
+| POST | `/api/setup/login` | Mở cửa sổ terminal chạy `claude` để gõ `/login` |
+
+- **Package và lệnh:** `claude` (installer `irm https://claude.ai/install.ps1 | iex`), `git` (winget `Git.Git`), `vsbuild` (winget `Microsoft.VisualStudio.2022.BuildTools`, hỏi lại trước khi cài), `uv` (installer `astral.sh/uv/install.ps1`), `graphify` (`uv tool install --force graphifyy[mcp]==0.9.103`). `node`, `login`, `unity-mcp` chỉ kiểm tra, không cài.
+- **Live:** event `setup:job` gửi cả `SetupJob` (log tối đa 400 dòng, đã bỏ mã ANSI và dòng thanh tiến độ), gửi tối đa mỗi 300 ms khi có log mới và ngay khi đổi trạng thái.
+- **Sau khi cài xong:** server đọc lại PATH để lệnh mới dùng được ngay. Cài lại Claude Code thì Studio đọc lại phiên bản Claude. Thời gian tối đa mỗi lệnh 45 phút.

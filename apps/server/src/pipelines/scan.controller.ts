@@ -8,7 +8,7 @@ const wrap = <T>(f: () => T): T => { try { return f(); } catch (e) { throw new B
 export class ScanController {
   constructor(private readonly s: GameScanService) {}
   @Get() get() { return this.s.get(); }
-  @Post() start() { return wrap(() => this.s.start()); }
+  @Post() async start() { try { return await this.s.startChecked(); } catch (e) { throw new BadRequestException((e as Error).message); } }
   @Post('start-skill') runStart() { return wrap(() => this.s.runStart()); }
   @Get('img/:name') img(@Param('name') name: string, @Res() res: Response) {
     const p = this.s.image(name);

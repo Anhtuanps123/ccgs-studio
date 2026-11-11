@@ -171,3 +171,57 @@ Khác brief:
 - `spikes/graphify/mcp-spike.mjs`: graphify-mcp trong Agent SDK.
 - `spikes/graphify/planner-cost.cjs`, `session-tokens.cjs`: đo mốc từ DB và transcript (chỉ đọc).
 - Dữ liệu (ngoài git): `~/.ccgs-studio/projects/91b70652a67e34da/{graphify,spike-B,spike-C}`, tổng khoảng 153 MB. Có thể xoá `spike-*` sau khi chốt biến thể.
+
+## 9. Chi phí $1,81 của `revise` (bổ sung 2026-11-11)
+
+**Kết luận:** không phải do `/compact` cộng vào chính task đó. Nguyên nhân là `total_cost_usd` của SDK **luỹ kế theo session**: khi resume, SDK nạp lại tổng cũ của session, rồi cộng tiếp.
+
+- Bằng chứng trong DB: mọi task resume session planner `2dee6c9f…` có `cost_usd` tăng dần: plan 0,71 → revise 1 **1,30** → revise 2 **1,81** → `/setup-engine` 2,79 → … → `/story-done` 9,88. Task phản biện (session mới) thì không bị ảnh hưởng.
+- Thử nghiệm (haiku, `settingSources: []`, session t1 → resume t2 → `/compact` → resume t3): `total_cost_usd` = 0,0071 → 0,0083 → 0,0099 → 0,0114. Lần `/compact` có `usage` bằng 0 nhưng vẫn làm tổng tăng 0,0016, và phần đó lọt vào con số của **task kế tiếp**.
+- Runner trước đây không đọc kết quả của `/compact`, nên chi phí `/compact` chỉ bị lẫn qua tổng luỹ kế, không cộng trực tiếp.
+
+**Số đúng của các task cũ** (hiệu hai tổng luỹ kế liên tiếp, vẫn gồm `/compact` của task trước, vì khi đó chưa ghi riêng):
+
+| Task | `cost_usd` đã ghi | Chi phí riêng ước tính |
+|---|---|---|
+| plan 10/11 02:40 | 0,71 | 0,71 (session mới) |
+| revise 1, 02:55 | 1,30 | 0,59 (gồm `/compact` sau plan) |
+| revise 2, 03:00 | 1,81 | 0,51 (gồm `/compact` sau revise 1). Theo transcript, riêng lượt revise khoảng 0,36 USD |
+
+Hệ quả: tổng chi phí chuỗi ở màn Pipelines (cộng `costUsd` của từng bước cùng session) và `TaskStats.totalCostUsd` **đã bị đếm trùng** cho mọi chuỗi trước ngày 2026-11-11. DB cũ không được chuyển đổi.
+
+**Đã sửa:**
+- `runner.ts`: đọc `total_cost_usd` của lần `/compact` (`afterCompactUsd`), ghi log riêng "Chi phí /compact: $x".
+- `task-queue.ts` (`splitCost`): `costUsd` = tổng sau task − `sessionCostUsd` của task trước cùng session; `compactCostUsd` lưu riêng; `sessionCostUsd` lưu làm mốc. Resume mà không biết mốc thì `costUsd` = `null` (Unknown) và ghi log `warn`.
+- DB thêm cột `compact_cost_usd`, `session_cost_usd`. Màn Pipelines và `TaskStats` cộng `costUsd + compactCostUsd`; màn Task hiện riêng chi phí `/compact`.
+- Test: `phase4.test.ts` thêm 1 test (`splitCost` và luồng resume). `npm test` 78/78.
+- Giới hạn: task bị dừng hoặc lỗi không có `result` thì không có mốc; task resume kế tiếp sẽ tính cả chi phí của task đó.
+
+## 10. Đo mốc mới (bổ sung 2026-11-11, theo phản hồi Bước 0)
+
+**Đồ thị chính thức** dựng theo Quyết định 3 (A3 + `*.slnx`, `.claude/`, `.agents/` + 7 thư mục bên thứ ba của Meodoku, gồm `Assets/_D2MSDK/D2MServices/GoogleServices/`). Danh sách ở `spikes/graphify/excludes-final.json`.
+- 564 file, 4.844 node, 11.400 cạnh, 20,9 s (lần đầu, không cache), thư mục out 23 MB. Không còn node nào thuộc `GoogleServices` (chỗ rò `Level` đã đóng). `git status` của Meodoku không đổi.
+- 31 file C# không ra symbol (ví dụ `ManagerGame.cs`, `SQLiteManager.cs`), graphify báo là "data file hoặc extractor không mô hình được". Chưa xem nguyên nhân.
+- Đồ thị đang ở `~/.ccgs-studio/projects/91b70652a67e34da/graphify-new`. Việc xoá `graphify` cũ (biến thể A), `spike-B`, `spike-C` rồi đổi tên `graphify-new` → `graphify` bị bộ lọc an toàn chặn; chờ người dùng tự làm.
+
+**Điều kiện đo:** model opus (như mốc cũ), tắt phản biện, chế độ từng bước, prompt planner khoảng 31,7k ký tự, chưa dùng graphify. **Unity MCP không kết nối** (Unity Editor đóng), khác các lần đo cũ. Bước 2 phải đo cùng điều kiện.
+
+**Đổi yêu cầu lỗi:** tình huống "nhận thưởng 2 lần nếu thoát rồi vào lại" không khớp code. `DailyLoginManager.ClaimDailyLogin` ghi `ListDayClaimed` và `SaveToLocal()` ngay trong callback, nên vào lại thì `CanClaimReward` đã là false. Thay bằng tình huống có thật gần nhất: sau khi nhận thưởng ngày 7, `DataGameSave.ClaimDailyLogin` đặt `DayClaimDaily = 0` (`DataGameSave.DailyLogin.cs:52`), nên mở lại bảng trong cùng ngày thì `DailyLoginManager.Init()` rơi vào nhánh `isDefaultState`: ẩn bánh, xoá số ngày.
+
+| Yêu cầu | Lượt | Tool | Token ghi cache / đọc cache / ra | USD |
+|---|---|---|---|---|
+| Tính năng: "Thêm giới hạn: mỗi ngày chỉ được rút heo đất (PiggyBank) một lần, có popup xác nhận trước khi rút." | 5 | 9: Read 4, Grep 3, Glob 1, AskUserQuestion 1 (hỏi có cần `/prototype`, đã trả lời "Không") | 88.785 / 302.153 / 3.321 | **0,84** |
+| Lỗi: "Sau khi nhận thưởng đăng nhập ngày 7 (DailyLoginManager, DataGameSave.ClaimDailyLogin), đóng rồi mở lại bảng … trong cùng ngày thì bảng hiện trống: không có bánh, không có số ngày." | 3 | 4: Read 2, Grep 1, Glob 1 | 56.121 / 154.410 / 2.697 | **0,54** |
+
+- Kế hoạch tính năng: mẫu `feature-ui`, slug `piggy-bank`, 3 bước (quick-design → UX popup → create-stories). Server bỏ art-context vì đã có `design/art-context/piggy-bank.md`.
+- Kế hoạch lỗi: mẫu `bugfix`, slug `daily-login-day7-empty`, 3 bước. **Planner đã nêu đúng nguyên nhân** (reset `DayClaimDaily` về 0 trong cùng ngày) mà không cần graphify, vì yêu cầu đã nêu tên class.
+- Ngưỡng Bước 2 (không tăng quá khoảng 15%): tính năng ≤ khoảng 0,96 USD, lỗi ≤ khoảng 0,62 USD.
+
+**Phản biện sau bản sửa P2 ("Phản biện rẻ hơn")**, 1 vòng cho kế hoạch tính năng, chạy thành task riêng (session mới) bằng `spikes/graphify/critic-once.cjs`:
+
+| | Lượt | Tool | Token ghi / đọc / ra | USD |
+|---|---|---|---|---|
+| Trước (3 vòng, 10/11) | 19–20 | 28–38, có Agent | khoảng 100k / 735k–927k / 12–14k | 1,03–1,13 |
+| Sau (11/11) | 4 | 7: Grep 6, Glob 1, không Agent | 43.419 / 193.226 / 3.279 | **0,45** |
+
+Phản biện trả đúng JSON, có 2 cảnh báo có nội dung (phần thêm ngoài yêu cầu ở rigor minimal; câu cụ thể trong `design/game-brief.md` cần sửa). Chi phí mỗi vòng giảm khoảng 57%.

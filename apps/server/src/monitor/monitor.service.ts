@@ -272,7 +272,7 @@ export class MonitorService implements OnModuleDestroy {
     const r = this.db.$client.prepare(`SELECT COUNT(*) n, SUM(status = 'completed') ok, SUM(status = 'failed') bad, SUM(status = 'cancelled') can,
         AVG(CASE WHEN status = 'completed' AND started_at IS NOT NULL AND ended_at IS NOT NULL
           THEN (julianday(ended_at) - julianday(started_at)) * 86400000 END) avg,
-        SUM(cost_usd) cost, COUNT(cost_usd) costN
+        SUM(cost_usd) + COALESCE(SUM(compact_cost_usd), 0) cost, COUNT(cost_usd) costN
       FROM tasks WHERE status IN ('completed','failed','cancelled')`).get() as any;
     return { total: r.n, completed: r.ok ?? 0, failed: r.bad ?? 0, cancelled: r.can ?? 0, avgDurationMs: r.avg === null ? null : Math.round(r.avg), totalCostUsd: r.costN ? r.cost : null };
   }

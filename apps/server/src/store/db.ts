@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, kind TEXT NOT NULL, skill
   started_at TEXT, ended_at TEXT, result_text TEXT, changed_files TEXT, error TEXT);
 CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status, position);
 CREATE INDEX IF NOT EXISTS events_tooluse ON events(tool_use_id);
+CREATE INDEX IF NOT EXISTS events_task ON events(task_id, event_type);
 CREATE INDEX IF NOT EXISTS events_ts ON events(timestamp);
 CREATE INDEX IF NOT EXISTS sessions_last ON sessions(last_event_at);
 CREATE INDEX IF NOT EXISTS inv_type ON invocations(agent_type);
@@ -112,6 +113,10 @@ const MIGRATIONS: [table: string, column: string, ddl: string][] = [
   ['tasks', 'base_ref', 'TEXT'],
   ['tasks', 'diffs', 'TEXT'], // JSON TaskDiff[]
   ['tasks', 'project', 'TEXT'],
+  ['tasks', 'compact_cost_usd', 'REAL'],
+  ['tasks', 'session_cost_usd', 'REAL'], // SDK running total of the session after this task
+  ['tasks', 'context_tokens', 'INTEGER'], // context size of the task's last turn (decides /compact before a resume)
+  ['tasks', 'mcp', 'TEXT'], // JSON TaskMcp: MCP servers attached to the task and their call counts
 ];
 
 /** Opens (and creates) the Studio database. Use ':memory:' in tests. */

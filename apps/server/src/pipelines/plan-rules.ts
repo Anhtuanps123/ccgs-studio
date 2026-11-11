@@ -39,6 +39,59 @@ export function loadTemplates(dir = TEMPLATE_DIR): { templates: PlanTemplate[]; 
   return { templates, errors };
 }
 
+// ---------- Roles (plugin/plan-roles.yaml) ----------
+
+export interface PlanRoleDef { id: string; title: string; hint: string; skills: string[] }
+export const ROLES_FILE = path.join(STUDIO_PLUGIN_DIR, 'plan-roles.yaml');
+
+/** Reads the roles; a missing or broken file means no roles (the role picker is hidden, nothing is filtered). */
+export function loadRoles(file = ROLES_FILE): { roles: PlanRoleDef[]; errors: string[] } {
+  if (!fs.existsSync(file)) return { roles: [], errors: [] };
+  const roles: PlanRoleDef[] = [];
+  const errors: string[] = [];
+  let y: any;
+  try { y = YAML.parse(fs.readFileSync(file, 'utf8')) ?? {}; } catch (e) { return { roles, errors: [`${path.basename(file)}: ${(e as Error).message}`] }; }
+  const seen = new Set<string>();
+  for (const [i, r] of (Array.isArray(y.roles) ? y.roles : []).entries()) {
+    if (typeof r?.id !== 'string' || !/^[a-z0-9-]+$/.test(r.id) || seen.has(r.id)) { errors.push(`vai trò ${i + 1}: id thiếu, sai dạng hoặc trùng`); continue; }
+    seen.add(r.id);
+    const skills = (Array.isArray(r.skills) ? r.skills : []).filter((s: unknown) => typeof s === 'string' && s.trim()).map((s: string) => s.trim().replace(/^\//, ''));
+    roles.push({ id: r.id, title: String(r.title ?? r.id), hint: String(r.hint ?? ''), skills });
+  }
+  return { roles, errors };
+}
+
+/** The role of a skill (first role that lists it), or null. */
+export const roleOfSkill = (skill: string | null | undefined, roles: PlanRoleDef[]): string | null =>
+  (skill && roles.find(r => r.skills.includes(skill))?.id) || null;
+
+/** Keeps a step's role when it is a known id, otherwise takes the role of its skill. Mutates and returns the steps. */
+export function fillRoles<T extends { skill: string | null; role?: string | null }>(steps: T[], roles: PlanRoleDef[]): T[] {
+  if (!roles.length) return steps;
+  for (const s of steps) if (!s.role || !roles.some(r => r.id === s.role)) s.role = roleOfSkill(s.skill, roles);
+  return steps;
+}
+
+/** The chosen role ids that actually filter: null when nothing is chosen or every role is. */
+export function activeRoles(chosen: string[] | null | undefined, roles: PlanRoleDef[]): string[] | null {
+  if (!roles.length || !chosen?.length) return null;
+  const ids = chosen.filter(c => roles.some(r => r.id === c));
+  return ids.length && ids.length < roles.length ? ids : null;
+}
+
+/** Role section of the planner prompt: the role list, which ones the user chose, and the "role" field per step. */
+export function rolesPrompt(roles: PlanRoleDef[], chosen: string[] | null | undefined): string {
+  if (!roles.length) return '';
+  const act = activeRoles(chosen, roles);
+  const title = (id: string) => roles.find(r => r.id === id)?.title ?? id;
+  const list = roles.map(r => `- ${r.id} (${r.title}): ${r.hint}${r.skills.length ? ` Skills: ${r.skills.map(s => '/' + s).join(', ')}` : ''}`).join('\n');
+  return `Roles (who does each step):
+${list}
+${act ? `The user chose ONLY these roles for this plan: ${act.map(title).join(', ')}. Plan steps for these roles only. Do not add a step of another role; a template step of another role goes into "omitted" with why "Không chọn vai trò <title>". If the request cannot be done without another role, say so in the summary.`
+    : 'The user chose every role.'}
+Give every step a "role": one of the role ids above (a prompt step too: the role whose work it is).`;
+}
+
 const forRigor = (t: PlanTemplate, rigor: Rigor) => t.steps.filter(s => !s.rigor || s.rigor.includes(rigor));
 
 /** The template list as the planner sees it, already filtered to the plan's rigor. */
@@ -68,6 +121,9 @@ export interface CheckInput {
   byUser: boolean;
   /** Builds a new step the same way the planner's steps are built. */
   make: (s: { title: string; skill: string; args: string | null; why: string }) => PipelineStep;
+  /** Roles from plan-roles.yaml and the ones the user chose (null/all = no filter). */
+  roles?: PlanRoleDef[];
+  chosen?: string[] | null;
 }
 
 export function checkPlan(c: CheckInput): { steps: PipelineStep[]; issues: PlanIssue[]; template: PlanTemplate | null } {
@@ -82,6 +138,20 @@ export function checkPlan(c: CheckInput): { steps: PipelineStep[]; issues: PlanI
     return fs.existsSync(path.join(c.root, p.replace(/\{slug\}/g, c.slug ?? '')));
   };
   const outPath = (p: string) => p.replace(/\{slug\}/g, c.slug ?? '{slug}');
+  const roles = c.roles ?? [];
+  const act = activeRoles(c.chosen, roles);
+  /** The role of this skill when the user did not choose it (its steps are not required, nor auto-added). */
+  const offRole = (skill: string | null) => {
+    const r = act ? roleOfSkill(skill, roles) : null;
+    return r && !act!.includes(r) ? roles.find(x => x.id === r)! : null;
+  };
+  fillRoles(steps, roles);
+  if (act) {
+    for (const s of steps) {
+      const r = s.status === 'pending' && s.role && !act.includes(s.role) ? roles.find(x => x.id === s.role) : null;
+      if (r) add('warn', 'role', `"${s.title}" thuộc vai trò ${r.title}, bạn không chọn vai trò này cho kế hoạch.`, s.id);
+    }
+  }
   if (!c.templates.length) return { steps, issues, template: null }; // no templates on disk: standard off
 
   let t = c.templates.find(x => x.id === c.type) ?? null;
@@ -94,7 +164,7 @@ export function checkPlan(c: CheckInput): { steps: PipelineStep[]; issues: PlanI
 
   // Auto-fix 1: art context before the first UI step (read-only skill, safe to add).
   const artSlot = slots.find(s => s.skill === ART_SKILL);
-  if (t?.ui && artSlot && !c.byUser && !live().some(s => s.skill === ART_SKILL) && !exists(artSlot.output)) {
+  if (t?.ui && artSlot && !c.byUser && !offRole(ART_SKILL) && !live().some(s => s.skill === ART_SKILL) && !exists(artSlot.output)) {
     const firstUi = steps.findIndex(s => s.status === 'pending' && s.skill && UI_SKILLS.has(s.skill));
     const at = firstUi >= 0 ? firstUi : steps.findIndex(s => s.status === 'pending');
     const fix = c.make({ title: 'Đọc art thật của game (Unity MCP)', skill: ART_SKILL, args: c.slug, why: 'Studio tự chèn: luật art-context trước bước UI.' });
@@ -118,7 +188,9 @@ export function checkPlan(c: CheckInput): { steps: PipelineStep[]; issues: PlanI
   for (const slot of slots.filter(s => !s.optional)) {
     if (L.some(s => s.skill === slot.skill)) continue;
     const why = c.omitted.find(o => o.skill.replace(/^\//, '') === slot.skill)?.why;
+    const off = offRole(slot.skill);
     if (slot.output && exists(slot.output)) add('info', 'required', `Bỏ /${slot.skill}: đã có ${outPath(slot.output)}.`);
+    else if (off) add('info', 'role', `Bỏ /${slot.skill}: không chọn vai trò ${off.title}.`);
     else if (why) add('info', 'required', `Bỏ /${slot.skill}: ${why}`);
     else add('error', 'required', `Thiếu bước /${slot.skill} theo mẫu "${t!.id}" (rigor ${c.rigor}). Thêm bước hoặc ghi lý do bỏ.`);
   }
@@ -153,5 +225,6 @@ export function checkPlan(c: CheckInput): { steps: PipelineStep[]; issues: PlanI
     if (s.status === 'pending' && !s.generated && !inTemplate && !(s.skill && ANYWHERE.has(s.skill)) && !s.why)
       add('warn', 'why', `"${s.title}" nằm ngoài mẫu nhưng không có lý do.`, s.id);
   });
+  fillRoles(steps, roles); // steps the auto-fixes added
   return { steps, issues, template: t };
 }

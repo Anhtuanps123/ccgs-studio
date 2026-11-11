@@ -68,8 +68,11 @@ export interface SystemStatus {
   lastEventAt: string | null; // Phase 2
 }
 
-/** compactAfter: send /compact to the task's session after it succeeds, so the next resume starts small. */
-export interface TaskDefaults { model: string | null; permissionMode: PermissionMode; maxRuntimeMin: number | null; compactAfter: boolean }
+/**
+ * compactAfter (name kept for saved settings): auto /compact. Runs right BEFORE a task resumes a session whose last context
+ * is at least compactMinTokens (default 100k), so sessions nobody resumes and small ones are never compacted.
+ */
+export interface TaskDefaults { model: string | null; permissionMode: PermissionMode; maxRuntimeMin: number | null; compactAfter: boolean; compactMinTokens?: number | null }
 export interface RetentionSettings { days: number | null; maxPayloadKB: number }
 export interface PhoenixSettings { enabled: boolean; endpoint: string }
 export interface StudioSettings {
@@ -81,6 +84,71 @@ export interface StudioSettings {
   /** S-06 */ phoenix: PhoenixSettings;
   /** Tools Studio allows without asking ("Luôn cho phép"); '*' = every tool. AskUserQuestion is always asked. Claude Code deny rules still apply. */
   autoAllow: string[];
+  /** Code map (graphify). Optional in saved files; the server fills the defaults. */
+  graphify?: GraphSettings;
+}
+
+// ---------- Code map (graphify, run from outside the project) ----------
+
+/** Per project, keyed by GraphStatus.projectId. */
+export interface GraphProjectSettings {
+  /** Extra exclusions, relative to the project root, one entry per line in the UI (for example "Assets/Spine/", "*.dll"). */
+  excludes: string[];
+  /** Assets/Plugins/ is excluded by default; true indexes it. */
+  includePlugins: boolean;
+}
+export interface GraphSettings {
+  /** Use the code map for Pipelines (pre-query for the planner). */
+  enabled: boolean;
+  /** Token budget of the pre-query (graphify query --budget), 200–20000, default 2000. */
+  budget: number;
+  projects: Record<string, GraphProjectSettings>;
+}
+export type GraphState = 'missing' | 'building' | 'ready' | 'stale' | 'error';
+export interface GraphStatus {
+  /** 'missing' also when no project is selected. */
+  state: GraphState;
+  projectId: string | null;
+  /** Where the graph lives (outside the project). */
+  dir: string | null;
+  enabled: boolean;
+  /** graphify version from `graphify --version`; null when the command is missing (error says why). */
+  graphify: string | null;
+  /** graphify-mcp answered an MCP initialize; null until checked (needs a graph). */
+  mcp: boolean | null;
+  toolError: string | null;
+  builtAt: string | null;
+  /** git HEAD of the project when the graph was last built or updated. */
+  commit: string | null;
+  nodes: number | null;
+  edges: number | null;
+  durationMs: number | null;
+  lastError: string | null;
+  /** Why the graph is stale (commit changed, code changed by a task, exclusions changed…). */
+  staleReason: string | null;
+  /** A background `graphify update` after a task is running. */
+  updating: boolean;
+  lastUpdateAt: string | null;
+  /** Exclusions applied by default (before the per-project ones). */
+  defaultExcludes: string[];
+}
+/** What the planner got from the code map (shown on the pipeline). */
+export interface PipelineGraphContext {
+  /** used: results went into the planner prompt; skipped: no identifier to look up; unavailable: off, no graph or no graphify; error: every lookup failed. */
+  status: 'used' | 'skipped' | 'unavailable' | 'error';
+  keywords: string[];
+  /** Where the keywords came from. */
+  source: 'user' | 'request' | null;
+  /** Vietnamese, one line per keyword or the reason. */
+  detail: string;
+  /** Characters added to the planner prompt. */
+  chars: number;
+  /** The latest planner task got the graphify MCP server (Claude queries the graph itself); undefined before one started. */
+  mcp?: boolean;
+  /** Vietnamese: why the MCP server was or was not attached. */
+  mcpDetail?: string;
+  /** Calls to the graphify MCP tools in the latest finished planner task (subagents included); null/undefined when unknown. */
+  mcpCalls?: number | null;
 }
 
 // ---------- Phase 2: monitoring ----------
@@ -134,6 +202,31 @@ export interface HookPreview {
 
 export interface DoctorCheck { id: string; label: string; ok: boolean | null; detail: string; }
 
+// ---------- Setup (cài package, 2026-11-11) ----------
+
+export type SetupLevel = 'required' | 'recommended' | 'optional';
+export interface SetupPackage {
+  id: string; label: string; level: SetupLevel;
+  /** Why Studio needs it. */
+  why: string;
+  /** null: could not tell (e.g. Unity not open). */
+  installed: boolean | null;
+  version: string | null;
+  detail: string;
+  /** Fixed command the server runs; null when Studio cannot install it (do it by hand, see detail). */
+  install: { command: string; confirm: string | null; blockedBy: string | null } | null;
+  /** 'login' opens a terminal running claude so the user types /login. */
+  action: 'login' | null;
+}
+export interface SetupJob {
+  id: string; packageId: string; label: string; command: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  startedAt: string; endedAt: string | null; exitCode: number | null;
+  /** Last lines of output (capped). */
+  log: string[];
+}
+export interface SetupState { platform: string; packages: SetupPackage[]; job: SetupJob | null; }
+
 export interface IngestBody { v: 1; receivedAt: string; taskId: string | null; origin: 'studio-settings' | 'local-settings' | 'doctor'; payload: Record<string, unknown>; }
 
 // WebSocket events (namespace /live)
@@ -149,6 +242,10 @@ export interface ServerToClient {
   'interaction:new': (p: PendingInteraction) => void;
   'interaction:resolved': (p: { id: string }) => void;
   'pipeline:upsert': (p: Pipeline) => void;
+  /** A plan the user deleted. */
+  'pipeline:delete': (p: { id: string }) => void;
+  'graph:upsert': (p: GraphStatus) => void;
+  'setup:job': (p: SetupJob) => void;
 }
 
 // ---------- Phase 3: tasks ----------
@@ -162,9 +259,27 @@ export interface Task {
   permissionMode: PermissionMode; status: TaskStatus; position: number | null; // 1-based while queued
   sessionId: string | null; resumeOf: string | null; createdAt: string; startedAt: string | null; endedAt: string | null;
   resultText: string | null; changedFiles: ChangedFile[] | null; error: string | null;
-  /** M-PF-03: total_cost_usd from the SDK result (list prices, an estimate). */ costUsd: number | null;
+  /**
+   * M-PF-03: cost of this task alone (list prices, an estimate). The SDK reports a running total per session, so for a
+   * resumed session this is that total minus the session's total after the previous task; null when that is unknown.
+   */
+  costUsd: number | null;
+  /** Cost of the /compact that ran before the task (on the resumed session), kept apart from costUsd; null when none ran or unknown. */
+  compactCostUsd?: number | null;
+  /** SDK running total of the session after this task (baseline for the next resumed task). */
+  sessionCostUsd?: number | null;
+  /** Context size (tokens) of the task's last main-thread turn; decides whether to /compact before the next resume. */
+  contextTokens?: number | null;
   /** T-TC-06: commit the diff is taken against (git stash create / HEAD); null when unknown. */ baseRef: string | null;
+  /** MCP servers Studio attached to this task (for example graphify); null for tasks run before this existed. */
+  mcp?: TaskMcp | null;
 }
+/**
+ * servers: names of the MCP servers attached (empty when none). note: Vietnamese, why (not) attached.
+ * calls: tool calls per attached server, counted from the hook events when the task ended (subagents included);
+ * null while it runs.
+ */
+export interface TaskMcp { servers: string[]; note: string | null; calls: Record<string, number> | null }
 /** resumeOf: session id to continue (T-TC-07). Unset fields take the task defaults (S-03). */
 export interface NewTask { kind: 'prompt' | 'skill'; skill?: string; args?: string; prompt?: string; model?: string | null; permissionMode?: PermissionMode; resumeOf?: string; }
 
@@ -173,6 +288,11 @@ export interface PendingInteraction {
   id: string; taskId: string; kind: 'question' | 'permission'; toolUseId: string | null; agentInvocationId: string | null; createdAt: string;
   question?: { questions: QuestionSpec[] };
   permission?: { toolName: string; title?: string; inputSummary: string; decisionReason?: string; blockedPath?: string };
+  /**
+   * Questions only: what Claude wrote (same thread: main session or that subagent) since its previous question, so the
+   * draft it asks about is shown with the card. "" when it wrote nothing; absent when unknown.
+   */
+  context?: string;
 }
 /** POST /api/interactions/:id/answer. Multi-select answers are joined with ", ". */
 export interface QuestionAnswer { answers: Record<string, string> }
@@ -236,7 +356,11 @@ export interface PlanStep {
   why: string | null;
   /** 'stories': when this step ends, add /dev-story + /story-done for each story file it created or changed. */
   expand: 'stories' | null;
+  /** Role id (plugin/plan-roles.yaml) the step belongs to; filled from the skill when the planner gives none. */
+  role?: string | null;
 }
+/** A role the user can pick for a plan (GET /api/pipelines/roles). */
+export interface PlanRoleInfo { id: string; title: string; hint: string; skills: string[] }
 export interface PipelineStep extends PlanStep {
   id: string; status: PipelineStepStatus; taskId: string | null; warning: string | null; generated: boolean;
   /** Checkpoint result after the step finished (P3, rules in apps/server/src/pipelines/checkpoint.ts). */
@@ -263,6 +387,8 @@ export interface Pipeline {
   planType?: string | null; planTypeTitle?: string | null; slug?: string | null;
   /** Steps of the template the planner left out, with its reason. */
   omitted?: { skill: string; why: string }[];
+  /** Roles the user chose for this plan (ids from plan-roles.yaml); null or missing = every role. */
+  roles?: string[] | null;
   /** Result of the server-side plan check. An 'error' blocks Duyệt và chạy. */
   issues?: PlanIssue[];
   /** The user changed the steps after planning (template errors become warnings). */
@@ -276,8 +402,12 @@ export interface Pipeline {
   /** Re-plans of the remaining steps so far; true while one is in progress (planning/critiquing). */
   replans?: number;
   replanning?: boolean;
-  /** Every planner task (first plan, revisions, re-plans), for cost. planTaskId is the latest. */
+  /** Every planner task (first plan, revisions, re-plans; plus the tasks of a plan dropped by restart-plan), for cost. planTaskId is the latest. */
   planTasks?: string[];
+  /** Code identifiers the user typed in "Từ khoá mã nguồn" (empty when none). */
+  codeKeywords?: string[];
+  /** Code map lookup done before the first plan; null while it runs (planTaskId is null then). */
+  graph?: PipelineGraphContext | null;
 }
 /** One finding of the plan check (apps/server/src/pipelines/plan-rules.ts). */
 export interface PlanIssue { level: 'error' | 'warn' | 'info'; rule: string; message: string; stepId: string | null }
@@ -300,7 +430,9 @@ export interface CritiqueRound {
   epoch?: number;
 }
 export type Rigor = 'minimal' | 'standard' | 'full';
-export interface NewPipeline { request: string; mode?: PipelineMode; permissionMode?: PermissionMode; model?: string | null; rigor?: Rigor; critic?: boolean }
+/** codeKeywords: "Từ khoá mã nguồn (không bắt buộc)", identifiers separated by commas or spaces; when set they replace the ones found in the request. */
+/** roles: ids from GET /api/pipelines/roles; omitted or every id = no role filter. */
+export interface NewPipeline { request: string; mode?: PipelineMode; permissionMode?: PermissionMode; model?: string | null; rigor?: Rigor; critic?: boolean; codeKeywords?: string; roles?: string[] }
 /** What /start has recorded in project.yaml. `started` is false while modes.rigor is unset. */
 /** source: where "started" came from — project.yaml (modes.rigor) or a /start that finished in Studio without saving. */
 export interface PipelineSetup { started: boolean; rigor: Rigor | null; stage: string | null; automation: string | null; error: string | null; source?: 'project.yaml' | 'session' | null; startedAt?: string | null }

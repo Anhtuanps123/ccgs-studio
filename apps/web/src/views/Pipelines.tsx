@@ -1,7 +1,7 @@
 // Feature pipelines: one request -> plan -> approve -> chained tasks in one session.
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import type { CritiqueRound, PermissionMode, Pipeline, PipelineMode, PipelineSetup, PipelineStep, PlanIssue, Rigor, SessionUsage, Skill, StudioSettings } from '@ccgs/shared';
+import type { CritiqueRound, PermissionMode, Pipeline, PipelineMode, PipelineSetup, PipelineStep, PlanIssue, PlanRoleInfo, Rigor, SessionUsage, Skill, StudioSettings } from '@ccgs/shared';
 import { api, live, useApi } from '../api';
 import { Status, when } from '../monitor';
 import { fmtNum, fmtUsd, totalTok } from '../insights';
@@ -21,6 +21,12 @@ const PSTATUS: Record<string, string> = { planning: 'running', critiquing: 'runn
 const PLABEL: Record<string, string> = { planning: 'Đang lập kế hoạch', critiquing: 'Đang phản biện', review: 'Chờ duyệt', running: 'Đang chạy', paused: 'Tạm dừng', completed: 'Xong', failed: 'Lỗi', cancelled: 'Đã huỷ' };
 const SLABEL: Record<string, string> = { pending: 'Chờ', running: 'Đang chạy', completed: 'Xong', failed: 'Lỗi', cancelled: 'Đã huỷ', skipped: 'Bỏ qua' };
 const PBadge = ({ s }: { s: string }) => <span className="status" data-s={PSTATUS[s] ?? s}>{PLABEL[s] ?? s}</span>;
+/** Role tag of a step (plan-roles.yaml); nothing when the step has no role. */
+const RoleTag = ({ id, roles }: { id?: string | null; roles: PlanRoleInfo[] }) => {
+  const r = id ? roles.find(x => x.id === id) : null;
+  return r ? <span className="tag" title={r.hint} style={{ marginLeft: 6 }}>{r.title}</span> : null;
+};
+const roleOfSkill = (skill: string | null, roles: PlanRoleInfo[]) => (skill && roles.find(r => r.skills.includes(skill))?.id) || null;
 const SBadge = ({ s }: { s: string }) => <span className="status" data-s={s === 'pending' || s === 'skipped' ? 'unknown' : s}>{SLABEL[s] ?? s}</span>;
 
 function usePipelines() {
@@ -30,10 +36,32 @@ function usePipelines() {
   useEffect(() => {
     const s = live();
     const h = () => { if (t.current) return; t.current = setTimeout(() => { t.current = null; reload(); }, 150); };
-    s.on('pipeline:upsert', h); s.on('connect', h);
-    return () => { s.off('pipeline:upsert', h); s.off('connect', h); };
+    s.on('pipeline:upsert', h); s.on('pipeline:delete', h); s.on('connect', h);
+    return () => { s.off('pipeline:upsert', h); s.off('pipeline:delete', h); s.off('connect', h); };
   }, [reload]);
   return list;
+}
+
+const GRAPH_USE: Record<NonNullable<Pipeline['graph']>['status'], string> = {
+  used: 'Có tra trước bản đồ code', skipped: 'Không tra trước bản đồ code (yêu cầu không có tên lớp/hàm)', unavailable: 'Không tra trước bản đồ code', error: 'Tra trước bản đồ code không ra kết quả',
+};
+/** What Claude did with the graphify MCP server during planning (null calls: still planning, or unknown). */
+const mcpUse = (g: NonNullable<Pipeline['graph']>) => !g.mcp ? '' : g.mcpCalls == null ? ' · Claude tự tra được bản đồ code'
+  : g.mcpCalls ? ` · Claude đã tra bản đồ code ${g.mcpCalls} lần` : ' · Claude không tra bản đồ code';
+/** What the planner got from the code map (graphify pre-query). */
+function GraphUse({ p }: { p: Pipeline }) {
+  const g = p.graph;
+  if (g === undefined) return null; // pipelines made before the code map
+  if (g === null) return p.status === 'planning' ? <div className="small muted">Đang tra bản đồ code…</div> : null;
+  return (
+    <details><summary className="small">{GRAPH_USE[g.status]}{g.keywords.length ? `: ${g.keywords.join(', ')}` : ''}{g.source === 'user' ? ' (từ ô từ khoá)' : ''}{mcpUse(g)}</summary>
+      <div className="small muted" style={{ marginTop: 4 }}>{g.detail}{g.chars ? ` Thêm ${g.chars.toLocaleString()} ký tự vào prompt lập kế hoạch.` : ''}</div>
+      {g.mcp !== undefined && <div className="small muted" style={{ marginTop: 4 }}>
+        {g.mcp ? 'MCP graphify: có gắn.' : 'MCP graphify: không gắn.'} {g.mcpDetail ?? ''}
+        {g.mcp && g.mcpCalls != null ? ` Lần lập kế hoạch gần nhất: ${g.mcpCalls ? `${g.mcpCalls} lần gọi tool graphify (kể cả subagent).` : 'không gọi tool graphify nào.'}` : ''}
+      </div>}
+    </details>
+  );
 }
 
 function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
@@ -43,6 +71,13 @@ function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
   const [perm, setPerm] = useState<PermissionMode>('default');
   const [model, setModel] = useState('');
   const [critic, setCritic] = useState(true);
+  const [keywords, setKeywords] = useState('');
+  const roleList = useApi<PlanRoleInfo[]>('/api/pipelines/roles');
+  const allRoles = roleList.data ?? [];
+  const [roles, setRoles] = useState<string[] | null>(null); // null = not loaded yet: every role
+  useEffect(() => { if (roleList.data) setRoles(r => r ?? roleList.data!.map(x => x.id)); }, [roleList.data]);
+  const toggleRole = (id: string) => setRoles(r => { const cur = r ?? allRoles.map(x => x.id); return cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id]; });
+  const noRole = allRoles.length > 0 && roles !== null && roles.length === 0;
   const setup = useApi<PipelineSetup>('/api/pipelines/setup');
   const [rigor, setRigor] = useState<Rigor>('minimal');
   useEffect(() => { if (setup.data?.rigor) setRigor(setup.data.rigor); }, [setup.data]);
@@ -53,8 +88,8 @@ function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      const p = await api<Pipeline>('/api/pipelines', { method: 'POST', body: JSON.stringify({ request, mode, permissionMode: perm, model: model || null, rigor, critic }) });
-      setRequest(''); onCreated(p.id);
+      const p = await api<Pipeline>('/api/pipelines', { method: 'POST', body: JSON.stringify({ request, mode, permissionMode: perm, model: model || null, rigor, critic, codeKeywords: keywords.trim() || undefined, ...(allRoles.length && roles ? { roles } : {}) }) });
+      setRequest(''); setKeywords(''); onCreated(p.id);
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   return (
@@ -69,6 +104,17 @@ function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
       {started && setup.data?.source !== 'session' && <p className="small muted" style={{ marginTop: 0 }}>Đã chạy /start: stage {setup.data?.stage ?? 'Unknown'}, rigor {setup.data?.rigor}, tự động {setup.data?.automation ?? 'Unknown'}.</p>}
       <div className="field"><label htmlFor="pl-req">Bạn muốn làm gì?</label>
         <textarea id="pl-req" value={request} onChange={e => setRequest(e.target.value)} placeholder="Ví dụ: Tôi muốn tạo chức năng Lucky Spin: 1 lượt quay miễn phí mỗi ngày, thêm lượt qua quảng cáo" style={{ minHeight: 90 }} /></div>
+      <div className="field"><label htmlFor="pl-kw">Từ khoá mã nguồn (không bắt buộc)</label>
+        <input type="text" id="pl-kw" value={keywords} onChange={e => setKeywords(e.target.value)} placeholder="Ví dụ: PiggyBank, DailyLoginManager" />
+        <span className="hint">Tên lớp/hàm trong code, cách nhau bằng dấu phẩy. Studio tra bản đồ code (graphify) cho các tên này rồi đưa kết quả cho Claude lập kế hoạch. Để trống thì Studio tự lấy các tên dạng PascalCase/camelCase trong câu yêu cầu; không có tên nào thì không tra.</span></div>
+      {allRoles.length > 0 && <div className="field"><label>Vai trò tham gia</label>
+        <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>{allRoles.map(r => (
+          <label key={r.id} className="opt" style={{ flex: '1 1 150px', margin: 0 }} title={r.skills.map(x => '/' + x).join(', ')}>
+            <input type="checkbox" checked={roles?.includes(r.id) ?? true} onChange={() => toggleRole(r.id)} />
+            <div><b>{r.title}</b><div className="small muted">{r.hint}</div></div></label>
+        ))}</div>
+        <span className="hint">Claude chỉ lên bước cho các vai trò được tick. Bước bắt buộc của vai trò bỏ tick không bị báo thiếu. Tick hết = như trước.</span>
+        {noRole && <span className="badge-err">Chọn ít nhất một vai trò.</span>}</div>}
       <div className="field"><label>Cách chạy</label>
         <div className="opt-list">{MODES.map(([v, l, d]) => (
           <label key={v} className="opt"><input type="radio" name="pl-mode" checked={mode === v} onChange={() => setMode(v)} /><div><b>{l}</b><div className="small muted">{d}</div></div></label>
@@ -87,25 +133,27 @@ function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
       </div>
       <label className="opt" style={{ marginBottom: 8 }}><input type="checkbox" checked={critic} onChange={e => setCritic(e.target.checked)} /><div><b>Phản biện kế hoạch</b><div className="small muted">Soát kế hoạch theo góc nhìn producer (chỉ đọc). Nếu thấy lỗi, planner sửa lại, tối đa 2 lần. Tốn thêm token.</div></div></label>
       <p className="small muted" style={{ marginTop: 0 }}>Bước đầu Claude chỉ đọc project để lập kế hoạch, không sửa file. Bạn xem và sửa kế hoạch trước khi chạy.</p>
-      <div className="row"><button className="btn primary" disabled={busy || !request.trim() || !started} onClick={submit}>Lập kế hoạch</button>{err && <span className="badge-err">{err}</span>}</div>
+      <div className="row"><button className="btn primary" disabled={busy || !request.trim() || !started || noRole} onClick={submit}>Lập kế hoạch</button>{err && <span className="badge-err">{err}</span>}</div>
     </div></div>
   );
 }
 
-type Draft = Pick<PipelineStep, 'title' | 'skill' | 'args' | 'prompt' | 'why'> & { id?: string; expand: PipelineStep['expand'] };
+type Draft = Pick<PipelineStep, 'title' | 'skill' | 'args' | 'prompt' | 'why' | 'role'> & { id?: string; expand: PipelineStep['expand'] };
 
-function StepEditor({ d, skills, onChange, onDelete, onUp, onDown }: {
-  d: Draft; skills: Pick<Skill, 'name' | 'argumentHint'>[]; onChange: (d: Draft) => void; onDelete: () => void; onUp?: () => void; onDown?: () => void;
+function StepEditor({ d, skills, roles, onChange, onDelete, onUp, onDown }: {
+  d: Draft; skills: Pick<Skill, 'name' | 'argumentHint'>[]; roles: PlanRoleInfo[]; onChange: (d: Draft) => void; onDelete: () => void; onUp?: () => void; onDown?: () => void;
 }) {
   return (
     <div className="stack" style={{ gap: 6 }}>
       <div className="row">
         <input type="text" value={d.title} onChange={e => onChange({ ...d, title: e.target.value })} aria-label="Tên bước" style={{ flex: 2, minWidth: 160 }} />
-        <select value={d.skill ?? ''} onChange={e => onChange({ ...d, skill: e.target.value || null, prompt: e.target.value ? null : d.prompt ?? '' })} aria-label="Skill" style={{ flex: 1, minWidth: 150 }}>
+        <select value={d.skill ?? ''} onChange={e => onChange({ ...d, skill: e.target.value || null, prompt: e.target.value ? null : d.prompt ?? '', role: roleOfSkill(e.target.value || null, roles) ?? d.role ?? null })} aria-label="Skill" style={{ flex: 1, minWidth: 150 }}>
           <option value="">Prompt tự do</option>
           {d.skill && !skills.some(s => s.name === d.skill) && <option value={d.skill}>/{d.skill} (không có)</option>}
           {skills.map(s => <option key={s.name} value={s.name}>/{s.name}</option>)}
         </select>
+        {roles.length > 0 && <select value={d.role ?? ''} onChange={e => onChange({ ...d, role: e.target.value || null })} aria-label="Vai trò" style={{ width: 'auto' }}>
+          <option value="">Vai trò?</option>{roles.map(r => <option key={r.id} value={r.id}>{r.title}</option>)}</select>}
         <button className="btn sm" disabled={!onUp} onClick={onUp} aria-label="Đưa lên">Lên</button>
         <button className="btn sm" disabled={!onDown} onClick={onDown} aria-label="Đưa xuống">Xuống</button>
         <button className="btn sm danger" onClick={onDelete}>Xoá</button>
@@ -117,8 +165,10 @@ function StepEditor({ d, skills, onChange, onDelete, onUp, onDown }: {
   );
 }
 
-function Detail({ p }: { p: Pipeline }) {
+function Detail({ p, onDeleted }: { p: Pipeline; onDeleted: () => void }) {
   const skills = useApi<Skill[]>('/api/skills', ['skills']);
+  const roleList = useApi<PlanRoleInfo[]>('/api/pipelines/roles');
+  const roles = roleList.data ?? [];
   const { tasks, inter } = useTaskData();
   const usage = useApi<SessionUsage>(p.sessionId ? `/api/sessions/${encodeURIComponent(p.sessionId)}/usage` : null);
   const [drafts, setDrafts] = useState<Draft[] | null>(null);
@@ -145,7 +195,9 @@ function Detail({ p }: { p: Pipeline }) {
   const asks = (inter.data ?? []).filter(i => i.taskId === runningTask);
   const taskOf = (id: string | null) => (id ? (tasks.data ?? []).find(t => t.id === id) : undefined);
   const extra = [...new Set([p.planTaskId, ...(p.planTasks ?? []), ...(p.critiques ?? []).flatMap(c => [c.planTaskId, c.taskId])])];
-  const cost = p.steps.map(s => taskOf(s.taskId)?.costUsd).concat(extra.map(id => taskOf(id)?.costUsd))
+  // A task's own cost plus the /compact after it (both are per-task, not the session's running total).
+  const costOf = (t?: { costUsd: number | null; compactCostUsd?: number | null }) => (typeof t?.costUsd === 'number' ? t.costUsd + (t.compactCostUsd ?? 0) : undefined);
+  const cost = p.steps.map(s => costOf(taskOf(s.taskId))).concat(extra.map(id => costOf(taskOf(id))))
     .filter((x): x is number => typeof x === 'number');
   const refresh = () => { tasks.reload(); inter.reload(); };
 
@@ -154,7 +206,7 @@ function Detail({ p }: { p: Pipeline }) {
     try { await api(`/api/pipelines/${p.id}${path}`, { method, body: body ? JSON.stringify(body) : undefined }); setDrafts(null); }
     catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
-  const editing = drafts ?? pending.map(s => ({ id: s.id, title: s.title, skill: s.skill, args: s.args, prompt: s.prompt, why: s.why, expand: s.expand }));
+  const editing = drafts ?? pending.map(s => ({ id: s.id, title: s.title, skill: s.skill, args: s.args, prompt: s.prompt, why: s.why, expand: s.expand, role: s.role ?? null }));
   const dirty = drafts !== null || mode !== p.mode || perm !== p.permissionMode;
   const setAt = (i: number, d: Draft) => setDrafts(editing.map((x, k) => (k === i ? d : x)));
   const move = (i: number, j: number) => { const xs = editing.slice(); [xs[i], xs[j]] = [xs[j], xs[i]]; setDrafts(xs); };
@@ -162,6 +214,14 @@ function Detail({ p }: { p: Pipeline }) {
   const revise = async () => {
     if (dirty) await call('/steps', { steps: editing, mode, permissionMode: perm }, 'PUT');
     await call('/revise', { note: fixNote.trim() || null }); setFixNote('');
+  };
+  const active = ['planning', 'critiquing', 'running'].includes(p.status);
+  const remove = async () => {
+    if (!window.confirm(`Xoá kế hoạch "${p.request.length > 80 ? p.request.slice(0, 80) + '…' : p.request}"?\nKhông khôi phục được. Các task đã chạy vẫn còn ở Task Center.`)) return;
+    setBusy(true); setErr(null);
+    // The same Detail then shows the next plan, so busy must not stay on.
+    try { await api(`/api/pipelines/${p.id}`, { method: 'DELETE' }); setBusy(false); onDeleted(); }
+    catch (e) { setErr((e as Error).message); setBusy(false); }
   };
   const startNow = async () => { if (dirty) await call('/steps', { steps: editing, mode, permissionMode: perm }, 'PUT'); await call('/start'); };
   const studio = useApi<{ name: string; description: string; argumentHint: string | null }[]>('/api/pipelines/studio-skills');
@@ -174,7 +234,9 @@ function Detail({ p }: { p: Pipeline }) {
           <h3 style={{ whiteSpace: 'pre-wrap' }}>{p.request}</h3></div><span>{p.rigor && <span className="tag">rigor {p.rigor}</span>} <PBadge s={p.status} /></span></div>
         <div className="panel-b stack">
           {p.summary && <div>{p.summary}</div>}
+          {p.roles?.length ? <div className="small muted">Vai trò: {p.roles.map(id => roles.find(r => r.id === id)?.title ?? id).join(', ')}</div> : null}
           {p.note && <div className="small">{p.note}</div>}
+          <GraphUse p={p} />
           {p.error && <div className="badge-err">{p.error}</div>}
           {err && <div className="badge-err">{err}</div>}
           <PlanCheck p={p} />
@@ -208,7 +270,12 @@ function Detail({ p }: { p: Pipeline }) {
               <button className="btn primary" disabled={busy} onClick={startNow}>{p.status === 'review' ? 'Duyệt và chạy' : 'Tiếp tục'}</button>}
             {editable && dirty && <button className="btn" disabled={busy} onClick={save}>Lưu kế hoạch</button>}
             {(p.status === 'critiquing' || revising) && <button className="btn" disabled={busy} onClick={() => call('/skip-critique')}>{revising ? 'Dừng, giữ kế hoạch cũ' : 'Bỏ qua phản biện'}</button>}
+            {['failed', 'cancelled'].includes(p.status) && !p.steps.some(s => s.taskId) &&
+              <button className="btn primary" disabled={busy} title="Lập kế hoạch lại từ đầu trong session mới, giữ nguyên yêu cầu và tuỳ chọn"
+                onClick={() => { if (!p.steps.length || window.confirm('Bỏ kế hoạch hiện tại và lập lại từ đầu?')) void call('/restart-plan'); }}>Lập kế hoạch lại</button>}
             {!['completed', 'cancelled'].includes(p.status) && <button className="btn danger" disabled={busy} onClick={() => call('/cancel')}>Huỷ chuỗi</button>}
+            <button className="btn danger" disabled={busy || active} onClick={remove}
+              title={active ? 'Chuỗi đang chạy: bấm "Huỷ chuỗi" trước rồi mới xoá' : 'Xoá hẳn kế hoạch này khỏi danh sách'}>Xoá kế hoạch</button>
           </div>
         </div>
       </div>
@@ -224,7 +291,7 @@ function Detail({ p }: { p: Pipeline }) {
             return (
               <li key={s.id} style={{ display: 'block', padding: '10px 16px', borderBottom: '1px solid var(--line)' }}>
                 <div className="row" style={{ justifyContent: 'space-between' }}>
-                  <div><b>{s.title}</b> <code className="small">{s.skill ? `/${s.skill}${s.args ? ' ' + s.args : ''}` : (s.prompt ?? '').slice(0, 80)}</code>
+                  <div><b>{s.title}</b><RoleTag id={s.role} roles={roles} /> <code className="small">{s.skill ? `/${s.skill}${s.args ? ' ' + s.args : ''}` : (s.prompt ?? '').slice(0, 80)}</code>
                     {s.generated && <span className="tag" style={{ marginLeft: 6 }}>{s.fixOf ? 'điểm kiểm tra thêm' : 'tự thêm'}</span>}{s.expand && <span className="tag" style={{ marginLeft: 6 }}>sinh bước story</span>}</div>
                   <div className="row">{t && <Status s={t.status} />}{!t && <SBadge s={s.status} />}
                     {['failed', 'cancelled'].includes(s.status) && p.status !== 'cancelled' && <>
@@ -244,7 +311,7 @@ function Detail({ p }: { p: Pipeline }) {
             const orig = pending.find(s => s.id === d.id);
             return (
               <li key={d.id ?? `new-${i}`} style={{ display: 'block', padding: '10px 16px', borderBottom: '1px solid var(--line)' }}>
-                <StepEditor d={d} skills={allSkills} onChange={x => setAt(i, x)} onDelete={() => setDrafts(editing.filter((_, k) => k !== i))}
+                <StepEditor d={d} skills={allSkills} roles={roles} onChange={x => setAt(i, x)} onDelete={() => setDrafts(editing.filter((_, k) => k !== i))}
                   onUp={i > 0 ? () => move(i, i - 1) : undefined} onDown={i < editing.length - 1 ? () => move(i, i + 1) : undefined} />
                 {d.why && <div className="small muted" style={{ marginTop: 4 }}>{d.why}</div>}
                 {orig?.warning && !drafts && <div className="badge-err">{orig.warning}</div>}
@@ -253,7 +320,7 @@ function Detail({ p }: { p: Pipeline }) {
             );
           })}
         </ol>
-        {editable && <div className="panel-b"><button className="btn sm" onClick={() => setDrafts([...editing, { title: 'Bước mới', skill: null, args: null, prompt: '', why: null, expand: null }])}>Thêm bước</button></div>}
+        {editable && <div className="panel-b"><button className="btn sm" onClick={() => setDrafts([...editing, { title: 'Bước mới', skill: null, args: null, prompt: '', why: null, expand: null, role: null }])}>Thêm bước</button></div>}
       </div>}
     </div>
   );
@@ -332,7 +399,7 @@ export function Pipelines() {
             ))}</div> : <div className="empty">{list.error ?? 'Chưa có chuỗi nào.'}</div>}
           </div>
         </div>
-        {cur ? <Detail p={cur} /> : <div className="panel"><div className="empty">Nhập yêu cầu bên trái để bắt đầu.</div></div>}
+        {cur ? <Detail p={cur} onDeleted={() => { setSp({}, { replace: true }); list.reload(); }} /> : <div className="panel"><div className="empty">Nhập yêu cầu bên trái để bắt đầu.</div></div>}
       </div>
     </>
   );

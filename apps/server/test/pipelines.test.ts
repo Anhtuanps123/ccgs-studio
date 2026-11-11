@@ -184,6 +184,42 @@ describe('pipeline run', () => {
     expect(p.get(pl.id)!.error).toMatch(/Không đọc được/);
     expect(() => p.create({ request: ' ' })).toThrow();
   });
+
+  it('restart-plan: a pipeline that failed or was cancelled before any step plans again in a new session', async () => {
+    const { p, f, q } = setup();
+    let pl = p.create({ request: 'test lucky spin', model: 'sonnet', roles: ['qa'] });
+    const first = pl.planTaskId!;
+    expect(() => p.restartPlan(pl.id)).toThrow(/đã lỗi hoặc đã huỷ/);
+    await tick();
+    f.runs.get(first)!.finish({ ok: false, error: "You've hit your weekly limit" });
+    await tick();
+    expect(p.get(pl.id)).toMatchObject({ status: 'failed', error: expect.stringMatching(/weekly limit/) });
+
+    pl = p.restartPlan(pl.id);
+    expect(pl).toMatchObject({ status: 'planning', error: null, endedAt: null, steps: [], model: 'sonnet', roles: ['qa'], request: 'test lucky spin' });
+    expect(pl.planTaskId).not.toBe(first);
+    expect(pl.planTasks).toEqual([first, pl.planTaskId]); // the failed task still counts for cost
+    expect(q.get(pl.planTaskId!)).toMatchObject({ resumeOf: null, model: 'sonnet' });
+    await tick();
+    f.runs.get(pl.planTaskId!)!.finish({ resultText: PLAN });
+    await tick();
+    expect(p.get(pl.id)).toMatchObject({ status: 'review' });
+    expect(p.get(pl.id)!.steps).toHaveLength(2);
+
+    // Cancelled in review (no step ran): restart drops the old plan.
+    await p.cancel(pl.id);
+    pl = p.restartPlan(pl.id);
+    expect(pl).toMatchObject({ status: 'planning', steps: [] });
+    await tick();
+    f.runs.get(pl.planTaskId!)!.finish({ resultText: PLAN });
+    await tick();
+
+    // Once a step has run, only "Lập lại kế hoạch" is allowed.
+    pl = p.start(pl.id);
+    await tick();
+    await p.cancel(pl.id);
+    expect(() => p.restartPlan(pl.id)).toThrow(/đã chạy bước/);
+  });
 });
 
 describe('game scan (Unity MCP)', () => {
@@ -485,5 +521,61 @@ describe('pipeline checkpoints and re-plan (P3)', () => {
     expect(pl.status).toBe('paused');
     expect(pl.checkpoint!.reason).toMatch(/không tạo hoặc sửa file/);
     expect(p.start(pl.id).status).toBe('running');
+  });
+});
+
+describe('pipeline delete', () => {
+  it('deletes a plan that is not running; its tasks stay; a running plan must be cancelled first', async () => {
+    const { p, q, f } = setup();
+    const removed: string[] = [];
+    p.bus.on('removed', id => removed.push(id));
+    const pl = p.create({ request: 'Lucky spin' });
+    await tick();
+    expect(() => p.remove(pl.id)).toThrow(/Huỷ chuỗi/);
+    f.runs.get(pl.planTaskId!)!.finish({ resultText: PLAN });
+    await tick();
+    expect(p.get(pl.id)!.status).toBe('review');
+    expect(p.remove(pl.id)).toEqual({ id: pl.id });
+    expect(p.get(pl.id)).toBeNull();
+    expect(p.list().some(x => x.id === pl.id)).toBe(false);
+    expect(q.get(pl.planTaskId!)).not.toBeNull(); // the planner task stays in the Task Center
+    expect(removed).toEqual([pl.id]);
+    expect(() => p.remove(pl.id)).toThrow(/Không có chuỗi/);
+
+    const other = p.create({ request: 'Heo đất' });
+    await p.cancel(other.id);
+    expect(p.remove(other.id)).toEqual({ id: other.id });
+  });
+});
+
+describe('pipeline roles', () => {
+  const ROLES = [
+    { id: 'design', title: 'Designer', hint: '', skills: ['quick-design'] },
+    { id: 'dev', title: 'Developer', hint: '', skills: ['create-stories', 'dev-story', 'story-done'] },
+  ];
+  function withRoles() {
+    const f = fakeRunner();
+    const db = openDb(':memory:');
+    const q = new TaskQueue({ db, runner: f.runner, project: () => 'x', snapshot: async () => new Map(), sessionExists: () => true });
+    const p = new PipelineService({ db, queue: q, skills: () => SKILLS, project: () => tmpProject('modes:\n  rigor: minimal\n'), templates: () => [], roles: () => ROLES, critic: false });
+    return { p, q, f };
+  }
+  it('stores the chosen roles, puts them in the planner prompt, fills step roles; rejects an empty choice', async () => {
+    const { p, q, f } = withRoles();
+    expect(p.roleList().map(r => r.id)).toEqual(['design', 'dev']);
+    expect(() => p.create({ request: 'x', roles: ['zzz'] })).toThrow('ít nhất một vai trò');
+    let pl = p.create({ request: 'Tạo Lucky Spin', roles: ['dev', 'zzz', 'dev'] });
+    expect(pl.roles).toEqual(['dev']);
+    expect(q.get(pl.planTaskId!)!.prompt).toContain('ONLY these roles for this plan: Developer');
+    await tick();
+    f.runs.get(pl.planTaskId!)!.finish({ resultText: PLAN });
+    await tick();
+    pl = p.get(pl.id)!;
+    expect(pl.steps.map(s => s.role)).toEqual(['design', 'dev']);
+    expect(pl.issues?.find(i => i.rule === 'role')?.message).toContain('Designer');
+    // No choice sent: every role, no filter (old clients).
+    const all = p.create({ request: 'y' });
+    expect(all.roles).toBeNull();
+    expect(q.get(all.planTaskId!)!.prompt).toContain('The user chose every role');
   });
 });

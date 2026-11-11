@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { ConfigSummary, CurrentTask, GameScan, PipelineSetup, SystemStatus, Task } from "@ccgs/shared";
+import type { ConfigSummary, CurrentTask, GameScan, GraphStatus, PipelineSetup, SystemStatus, Task } from "@ccgs/shared";
 import { api, live, useApi } from "../api";
 import { Duration, Status, when } from '../monitor';
 import { useTaskData } from './Tasks';
@@ -72,6 +72,48 @@ function GameScanCard() {
   );
 }
 
+const GRAPH_STATE: Record<GraphStatus['state'], string> = { missing: 'Chưa dựng', building: 'Đang dựng…', ready: 'Sẵn sàng', stale: 'Cũ', error: 'Lần dựng cuối lỗi' };
+
+/** Code map (graphify, brief A8): built outside the project, used to look up code before planning. */
+function CodeMapCard() {
+  const g = useApi<GraphStatus>('/api/graph');
+  const { reload } = g;
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    const s = live(); const h = () => reload();
+    s.on('graph:upsert', h); s.on('connect', h);
+    return () => { s.off('graph:upsert', h); s.off('connect', h); };
+  }, [reload]);
+  const build = async () => { setErr(null); try { await api('/api/graph/build', { method: 'POST' }); reload(); } catch (e) { setErr(String((e as Error).message ?? e)); } };
+  const d = g.data;
+  if (!d) return <div className="panel"><div className="empty">{g.error ?? 'Đang tải…'}</div></div>;
+  const usable = d.state === 'ready' || d.state === 'stale';
+  return (
+    <div className="panel"><div className="panel-h"><h3>Bản đồ code (graphify)</h3><Link to="/preferences" className="small">Cài đặt</Link></div><div className="panel-b stack">
+      <div className="small muted">Đồ thị lớp/hàm của code, dựng bằng tree-sitter (không gọi LLM), lưu ngoài project. Khi lập kế hoạch, Studio tra sẵn các tên lớp/hàm có trong yêu cầu để Claude tìm đúng chỗ.</div>
+      <ul className="checks">
+        <li><Mark ok={!!d.graphify && d.mcp !== false} /><div><b>graphify {d.graphify ?? 'chưa cài'}</b>
+          <div className="muted small">{d.toolError ?? (d.mcp === null ? 'graphify-mcp chưa kiểm tra (chạy Kiểm tra môi trường trong Cài đặt).' : 'graphify-mcp chạy được.')}</div></div></li>
+        <li><Mark ok={d.state === 'ready'} warn={d.state === 'stale' || d.state === 'building'} /><div><b>{GRAPH_STATE[d.state]}{d.updating ? ' · đang cập nhật sau task' : ''}{!d.enabled ? ' · đang tắt cho Pipelines' : ''}</b>
+          <div className="muted small">
+            {d.nodes !== null ? `${d.nodes.toLocaleString()} node, ${(d.edges ?? 0).toLocaleString()} cạnh. ` : ''}
+            {d.builtAt ? `Dựng lúc ${new Date(d.builtAt).toLocaleString()}${d.durationMs ? ` (${(d.durationMs / 1000).toFixed(1)} s)` : ''}. ` : ''}
+            {d.lastUpdateAt ? `Cập nhật lúc ${new Date(d.lastUpdateAt).toLocaleString()}. ` : ''}
+            {d.commit ? `Commit ${d.commit.slice(0, 7)}.` : ''}
+            {d.state === 'missing' && !d.nodes ? 'Bấm "Dựng bản đồ code" để dựng lần đầu.' : ''}
+          </div>
+          {d.staleReason && <div className="small">{d.staleReason}</div>}
+          {d.lastError && <div className="badge-err">{d.lastError}</div>}</div></li>
+      </ul>
+      <div className="row">
+        <button className="btn primary" disabled={!d.projectId || !d.graphify || d.state === 'building' || d.updating} onClick={build}>{usable || d.state === 'error' ? 'Dựng lại' : 'Dựng bản đồ code'}</button>
+        {d.dir && <span className="small muted" title={d.dir}>Lưu ở {d.dir}</span>}
+      </div>
+      {err && <div className="badge-err">{err}</div>}
+    </div></div>
+  );
+}
+
 /** T-DB-04 */
 function RecentActivity() {
   const { tasks } = useTaskData();
@@ -103,6 +145,7 @@ export function Dashboard({ sys, summary }: { sys: SystemStatus | null; summary:
       <div className="grid2">
         <div className="stack">
           <GameScanCard />
+          <CodeMapCard />
           <CurrentTaskCard />
           <RecentActivity />
         </div>

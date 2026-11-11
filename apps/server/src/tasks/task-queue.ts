@@ -1,9 +1,9 @@
 // T-TC-01..05: task store and single-runner queue. Independent of Nest so tests can drive it directly.
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import type { ChangedFile, NewTask, PendingInteraction, PermissionDecision, QuestionAnswer, Task, TaskDefaults, TaskDiff } from '@ccgs/shared';
+import type { ChangedFile, NewTask, PendingInteraction, PermissionDecision, QuestionAnswer, Task, TaskDefaults, TaskDiff, TaskMcp } from '@ccgs/shared';
 import type { Db } from '../store/db';
-import type { InteractionReply, RunHandle, RunOutcome, Runner } from './runner';
+import type { InteractionReply, RunHandle, RunOutcome, Runner, SessionExtras } from './runner';
 import { diffSnapshots, type Snapshot } from './git-snapshot';
 
 export type QueueEvents = { task: [Task]; interaction: [PendingInteraction]; resolved: [{ id: string }]; log: ['info' | 'warn' | 'error', string, string | null] };
@@ -36,7 +36,29 @@ function fromRow(r: any): Task {
     status: r.status, position: r.position, sessionId: r.session_id, resumeOf: r.resume_of, createdAt: r.created_at,
     startedAt: r.started_at, endedAt: r.ended_at, resultText: r.result_text,
     changedFiles: r.changed_files ? JSON.parse(r.changed_files) as ChangedFile[] : null, error: r.error,
-    costUsd: r.cost_usd ?? null, baseRef: r.base_ref ?? null,
+    costUsd: r.cost_usd ?? null, compactCostUsd: r.compact_cost_usd ?? null, sessionCostUsd: r.session_cost_usd ?? null,
+    contextTokens: r.context_tokens ?? null, baseRef: r.base_ref ?? null,
+    mcp: r.mcp ? JSON.parse(r.mcp) as TaskMcp : null,
+  };
+}
+
+/** Default for TaskDefaults.compactMinTokens: the fixed context alone (system prompt, CLAUDE.md, tools, skills) is ~55–70k. */
+export const COMPACT_MIN_TOKENS = 100_000;
+
+/**
+ * Splits the SDK's running session total into the /compact before the task and the task itself.
+ * before: the session's total after the previous task (0 for a new session, null when unknown).
+ * compactTotal: the running total after the /compact that ran before the task (null when none ran).
+ * If the SDK did not restore the total on resume (to < from), `to` is that query alone.
+ */
+export function splitCost(before: number | null, total: number | null | undefined, compactTotal: number | null | undefined) {
+  if (typeof total !== 'number') return { costUsd: null, compactCostUsd: null, sessionCostUsd: null };
+  const delta = (from: number | null, to: number) => (from === null ? null : to >= from ? to - from : to);
+  const compacted = typeof compactTotal === 'number';
+  return {
+    compactCostUsd: compacted ? delta(before, compactTotal) : null,
+    costUsd: delta(compacted ? compactTotal : before, total),
+    sessionCostUsd: total,
   };
 }
 
@@ -47,8 +69,12 @@ export class TaskQueue {
   private current: { task: Task; handle: RunHandle | null; stopping: boolean; timedOut: string | null } | null = null;
   private pending = new Map<string, Pending>();
   private pumping = false;
+  /** Decides extra SDK options (MCP servers, system prompt) per task right before it starts; set by PipelineService. */
+  private extrasFor: ((task: Task) => Promise<SessionExtras | null>) | null = null;
 
   constructor(private readonly d: QueueDeps) {}
+
+  setSessionExtras(fn: (task: Task) => Promise<SessionExtras | null>) { this.extrasFor = fn; }
 
   private get sql() { return this.d.db.$client; }
 
@@ -83,13 +109,16 @@ export class TaskQueue {
 
   private save(t: Task) {
     this.sql.prepare(`INSERT INTO tasks (id, kind, skill, args, prompt, model, permission_mode, status, position, session_id, resume_of,
-        created_at, started_at, ended_at, result_text, changed_files, error, cost_usd, base_ref)
+        created_at, started_at, ended_at, result_text, changed_files, error, cost_usd, compact_cost_usd, session_cost_usd, context_tokens, base_ref, mcp)
       VALUES (@id, @kind, @skill, @args, @prompt, @model, @permissionMode, @status, @position, @sessionId, @resumeOf,
-        @createdAt, @startedAt, @endedAt, @resultText, @changedFiles, @error, @costUsd, @baseRef)
+        @createdAt, @startedAt, @endedAt, @resultText, @changedFiles, @error, @costUsd, @compactCostUsd, @sessionCostUsd, @contextTokens, @baseRef, @mcp)
       ON CONFLICT(id) DO UPDATE SET status = excluded.status, position = excluded.position, session_id = excluded.session_id,
         started_at = excluded.started_at, ended_at = excluded.ended_at, result_text = excluded.result_text,
-        changed_files = excluded.changed_files, error = excluded.error, cost_usd = excluded.cost_usd, base_ref = excluded.base_ref`)
-      .run({ ...t, costUsd: t.costUsd ?? null, baseRef: t.baseRef ?? null, changedFiles: t.changedFiles ? JSON.stringify(t.changedFiles) : null });
+        changed_files = excluded.changed_files, error = excluded.error, cost_usd = excluded.cost_usd,
+        compact_cost_usd = excluded.compact_cost_usd, session_cost_usd = excluded.session_cost_usd,
+        context_tokens = excluded.context_tokens, base_ref = excluded.base_ref, mcp = excluded.mcp`)
+      .run({ ...t, costUsd: t.costUsd ?? null, compactCostUsd: t.compactCostUsd ?? null, sessionCostUsd: t.sessionCostUsd ?? null,
+        contextTokens: t.contextTokens ?? null, baseRef: t.baseRef ?? null, mcp: t.mcp ? JSON.stringify(t.mcp) : null, changedFiles: t.changedFiles ? JSON.stringify(t.changedFiles) : null });
     this.bus.emit('task', t);
     return t;
   }
@@ -98,6 +127,37 @@ export class TaskQueue {
     const t = this.get(id);
     if (!t) throw new BadTask('Không có task này');
     return this.save({ ...t, ...patch });
+  }
+
+  /**
+   * Calls to the tools of each MCP server attached to the task, from the hook events (PreToolUse carries the task id,
+   * subagents included). The hook posts each event before the tool runs, so all are in when the SDK result arrives.
+   */
+  private mcpCalls(id: string): Partial<Task> {
+    const m = this.get(id)?.mcp;
+    if (!m?.servers.length) return {};
+    const n = this.sql.prepare(`SELECT COUNT(*) n FROM events WHERE task_id = ? AND event_type = 'PreToolUse' AND substr(tool_name, 1, ?) = ?`);
+    const calls = Object.fromEntries(m.servers.map(s => { const p = `mcp__${s}__`; return [s, (n.get(id, p.length, p) as any).n as number]; }));
+    return { mcp: { ...m, calls } };
+  }
+
+  /** SDK running total of a session after its latest finished task that reported one. */
+  private sessionTotal(sessionId: string): number | null {
+    const r = this.sql.prepare(`SELECT session_cost_usd c FROM tasks WHERE session_id = ? AND session_cost_usd IS NOT NULL
+      AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 1`).get(sessionId) as any;
+    return r?.c ?? null;
+  }
+
+  /**
+   * Whether to /compact a session before resuming it: auto-compact on (Cài đặt) and its last known context is at least
+   * compactMinTokens. Unknown size (older tasks, or a session not run by Studio) compacts, as before.
+   */
+  private compactFirst(task: Task): boolean {
+    const def = this.d.defaults?.();
+    if (!task.resumeOf || !def?.compactAfter) return false;
+    const r = this.sql.prepare(`SELECT context_tokens n FROM tasks WHERE session_id = ? AND context_tokens IS NOT NULL
+      AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 1`).get(task.resumeOf) as any;
+    return r?.n == null || r.n >= (def.compactMinTokens ?? COMPACT_MIN_TOKENS);
   }
 
   /** Re-numbers queued tasks 1..n in the given order and emits the ones that moved. */
@@ -258,6 +318,16 @@ export class TaskQueue {
     const base = before && this.d.baseRef ? await this.d.baseRef(cwd).catch(() => null) : null;
     if (base) task = this.update(task.id, { baseRef: base });
     const id = task.id;
+    const compactFirst = this.compactFirst(task);
+    let extras: SessionExtras | null = null;
+    if (this.extrasFor) {
+      // A failure here never blocks the task: it runs without the extras.
+      try { extras = await this.extrasFor(task); }
+      catch (e) { this.bus.emit('log', 'warn', `Không chuẩn bị được MCP cho task: ${(e as Error).message}`, task.sessionId ?? null); }
+      const servers = Object.keys(extras?.mcpServers ?? {});
+      if (servers.length) this.bus.emit('log', 'info', `Gắn MCP cho task: ${servers.join(', ')}`, task.sessionId ?? null);
+      if (servers.length || extras?.note) task = this.update(id, { mcp: { servers, note: extras?.note ?? null, calls: null } });
+    }
     const handle = this.d.runner(task, {
       onSession: sid => { this.update(id, { sessionId: sid }); },
       log: (lvl, msg) => this.bus.emit('log', lvl, msg, this.get(id)?.sessionId ?? null),
@@ -273,7 +343,7 @@ export class TaskQueue {
         this.bus.emit('interaction', it);
         this.syncWaiting(id);
       }),
-    });
+    }, { compactFirst, extras });
     this.current.handle = handle;
     if (this.current.stopping) void handle.stop(); // cancelled during snapshot
     const maxMin = this.d.defaults?.().maxRuntimeMin ?? null;
@@ -298,10 +368,16 @@ export class TaskQueue {
       if (d) this.sql.prepare('UPDATE tasks SET diffs = ? WHERE id = ?').run(JSON.stringify(d), id);
     }
     const { stopping: stopped, timedOut } = this.current;
+    const resumed = this.get(id)?.resumeOf ?? null;
+    const cost = splitCost(resumed ? this.sessionTotal(resumed) : 0, out.costUsd, out.compactTotalUsd);
+    if (resumed && cost.costUsd === null && typeof out.costUsd === 'number') {
+      this.bus.emit('log', 'warn', `Task ${id.slice(0, 8)}: không biết chi phí luỹ kế trước đó của session, nên chi phí riêng của task là Unknown (SDK báo luỹ kế $${out.costUsd.toFixed(4)}).`, out.sessionId ?? null);
+    }
     this.update(id, {
       status: timedOut ? 'failed' : stopped ? 'cancelled' : out.ok ? 'completed' : 'failed',
-      endedAt: new Date().toISOString(), resultText: out.resultText, changedFiles, costUsd: out.costUsd ?? null,
+      endedAt: new Date().toISOString(), resultText: out.resultText, changedFiles, ...cost, contextTokens: out.contextTokens ?? null,
       error: timedOut ?? (stopped ? null : out.error), sessionId: out.sessionId ?? this.get(id)?.sessionId ?? null,
+      ...this.mcpCalls(id),
     });
     this.current = null;
     void this.pump();
