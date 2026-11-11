@@ -1,7 +1,7 @@
 // T-TC-01..05: task store and single-runner queue. Independent of Nest so tests can drive it directly.
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import type { ChangedFile, NewTask, PendingInteraction, PermissionDecision, QuestionAnswer, Task, TaskDefaults, TaskDiff, TaskMcp } from '@ccgs/shared';
+import type { Attachment, ChangedFile, NewTask, PendingInteraction, PermissionDecision, QuestionAnswer, Task, TaskDefaults, TaskDiff, TaskMcp } from '@ccgs/shared';
 import type { Db } from '../store/db';
 import type { InteractionReply, RunHandle, RunOutcome, Runner, SessionExtras } from './runner';
 import { diffSnapshots, type Snapshot } from './git-snapshot';
@@ -23,6 +23,8 @@ export interface QueueDeps {
   sessionExists?: (id: string) => boolean;
   /** Tools allowed without asking (Settings.autoAllow, '*' = all) and how to remember one more. */
   autoAllow?: { has(tool: string): boolean; add(tool: string): void };
+  /** Turns the attachment ids of a new task into files (AttachmentStore); throws on a missing one. */
+  attachments?: { resolve(ids: unknown): Attachment[] };
 }
 
 const SKILL_RE = /^[a-z0-9][a-z0-9._-]*(:[a-z0-9][a-z0-9._-]*)?$/i; // plugin skills: plugin:skill
@@ -39,6 +41,7 @@ function fromRow(r: any): Task {
     costUsd: r.cost_usd ?? null, compactCostUsd: r.compact_cost_usd ?? null, sessionCostUsd: r.session_cost_usd ?? null,
     contextTokens: r.context_tokens ?? null, baseRef: r.base_ref ?? null,
     mcp: r.mcp ? JSON.parse(r.mcp) as TaskMcp : null,
+    attachments: r.attachments ? JSON.parse(r.attachments) as Attachment[] : null,
   };
 }
 
@@ -109,16 +112,17 @@ export class TaskQueue {
 
   private save(t: Task) {
     this.sql.prepare(`INSERT INTO tasks (id, kind, skill, args, prompt, model, permission_mode, status, position, session_id, resume_of,
-        created_at, started_at, ended_at, result_text, changed_files, error, cost_usd, compact_cost_usd, session_cost_usd, context_tokens, base_ref, mcp)
+        created_at, started_at, ended_at, result_text, changed_files, error, cost_usd, compact_cost_usd, session_cost_usd, context_tokens, base_ref, mcp, attachments)
       VALUES (@id, @kind, @skill, @args, @prompt, @model, @permissionMode, @status, @position, @sessionId, @resumeOf,
-        @createdAt, @startedAt, @endedAt, @resultText, @changedFiles, @error, @costUsd, @compactCostUsd, @sessionCostUsd, @contextTokens, @baseRef, @mcp)
+        @createdAt, @startedAt, @endedAt, @resultText, @changedFiles, @error, @costUsd, @compactCostUsd, @sessionCostUsd, @contextTokens, @baseRef, @mcp, @attachments)
       ON CONFLICT(id) DO UPDATE SET status = excluded.status, position = excluded.position, session_id = excluded.session_id,
         started_at = excluded.started_at, ended_at = excluded.ended_at, result_text = excluded.result_text,
         changed_files = excluded.changed_files, error = excluded.error, cost_usd = excluded.cost_usd,
         compact_cost_usd = excluded.compact_cost_usd, session_cost_usd = excluded.session_cost_usd,
         context_tokens = excluded.context_tokens, base_ref = excluded.base_ref, mcp = excluded.mcp`)
       .run({ ...t, costUsd: t.costUsd ?? null, compactCostUsd: t.compactCostUsd ?? null, sessionCostUsd: t.sessionCostUsd ?? null,
-        contextTokens: t.contextTokens ?? null, baseRef: t.baseRef ?? null, mcp: t.mcp ? JSON.stringify(t.mcp) : null, changedFiles: t.changedFiles ? JSON.stringify(t.changedFiles) : null });
+        contextTokens: t.contextTokens ?? null, baseRef: t.baseRef ?? null, mcp: t.mcp ? JSON.stringify(t.mcp) : null,
+        attachments: t.attachments?.length ? JSON.stringify(t.attachments) : null, changedFiles: t.changedFiles ? JSON.stringify(t.changedFiles) : null });
     this.bus.emit('task', t);
     return t;
   }
@@ -203,10 +207,16 @@ export class TaskQueue {
       if (!/^[A-Za-z0-9_-]{6,128}$/.test(resumeOf)) throw new BadTask('Session để tiếp tục không hợp lệ');
       if (this.d.sessionExists && !this.d.sessionExists(resumeOf)) throw new BadTask('Không có session này để tiếp tục');
     }
+    let attachments: Attachment[] | null = null;
+    if (input.attachments !== undefined && input.attachments !== null) {
+      if (!this.d.attachments) throw new BadTask('Studio chưa bật tệp đính kèm');
+      try { attachments = this.d.attachments.resolve(input.attachments); } catch (e) { throw new BadTask((e as Error).message); }
+      if (!attachments.length) attachments = null;
+    }
     const t: Task = {
       id: randomUUID(), kind, skill, args, prompt, model, permissionMode: mode, status: 'queued',
       position: this.queuedIds().length + 1, sessionId: null, resumeOf, createdAt: new Date().toISOString(),
-      startedAt: null, endedAt: null, resultText: null, changedFiles: null, error: null, costUsd: null, baseRef: null,
+      startedAt: null, endedAt: null, resultText: null, changedFiles: null, error: null, costUsd: null, baseRef: null, attachments,
     };
     this.save(t);
     void this.pump();
@@ -214,12 +224,12 @@ export class TaskQueue {
   }
 
   /** T-TC-07: continue a finished task's session with a new prompt. */
-  resume(id: string, prompt: string): Task {
+  resume(id: string, prompt: string, attachments?: string[]): Task {
     const t = this.get(id);
     if (!t) throw new BadTask('Không có task này');
     if (!t.sessionId) throw new BadTask('Task này chưa có session để tiếp tục');
     if (!['completed', 'failed', 'cancelled'].includes(t.status)) throw new BadTask('Chỉ tiếp tục được task đã kết thúc');
-    return this.create({ kind: 'prompt', prompt, resumeOf: t.sessionId, model: t.model, permissionMode: t.permissionMode });
+    return this.create({ kind: 'prompt', prompt, resumeOf: t.sessionId, model: t.model, permissionMode: t.permissionMode, ...(attachments ? { attachments } : {}) });
   }
 
   /** Moves a queued task to 1-based `position`. */

@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import type { CriticIssue, CritiqueRound, NewPipeline, Pipeline, PipelineGraphContext, PipelineMode, PipelineSetup, PipelineStep, PlanIssue, PlanRoleInfo, Rigor, Task } from '@ccgs/shared';
+import type { Attachment, CriticIssue, CritiqueRound, NewPipeline, Pipeline, PipelineGraphContext, PipelineMode, PipelineSetup, PipelineStep, PlanIssue, PlanRoleInfo, Rigor, Task } from '@ccgs/shared';
 import type { Db } from '../store/db';
 import { BadTask, TaskQueue } from '../tasks/task-queue';
 import { activeRoles, checkPlan, fillRoles, loadRoles, loadTemplates, rolesPrompt, slugOf, templatesPrompt, type PlanRoleDef, type PlanTemplate } from './plan-rules';
@@ -27,7 +27,12 @@ export interface PipelineDeps {
    * attached to every task (Claude queries the graph itself; brief 6.2).
    */
   graph?: { enabled(): boolean; context(keywords: string[]): Promise<GraphContext>; mcpSession?(): Promise<{ extras: SessionExtras | null; detail: string }> };
+  /** Turns the attachment ids of a request into files (AttachmentStore). */
+  attachments?: { resolve(ids: unknown): Attachment[] };
 }
+
+/** Attachment ids to give a task of this pipeline (planner, critic, steps); nothing when the request has none. */
+const attachOf = (p: Pipeline) => (p.attachments?.length ? { attachments: p.attachments.map(a => a.id) } : {});
 
 /** Moved to the graph module: it is now the system prompt of every task with the graphify MCP server. */
 export { CODE_TOOLS_HINT } from '../graph/graph-core';
@@ -377,10 +382,15 @@ export class PipelineService {
       if (ids.size && !roles.length) throw new BadPipeline('Chọn ít nhất một vai trò');
       if (!ids.size) roles = null;
     }
+    let attachments: Attachment[] = [];
+    if (input.attachments !== undefined && input.attachments !== null) {
+      if (!this.d.attachments) throw new BadPipeline('Studio chưa bật tệp đính kèm');
+      try { attachments = this.d.attachments.resolve(input.attachments); } catch (e) { throw new BadPipeline((e as Error).message); }
+    }
     const p: Pipeline = {
       id: randomUUID(), request, summary: null, mode, permissionMode, model, rigor, status: 'planning', planTaskId: null, planTasks: [], sessionId: null,
       steps: [], createdAt: new Date().toISOString(), endedAt: null, error: null, note: null, critic, critiqueTaskId: null, critiques: [],
-      codeKeywords: typed, graph: null, roles,
+      codeKeywords: typed, graph: null, roles, ...(attachments.length ? { attachments } : {}),
     };
     return this.plan(p, setup, scan?.summary ?? null);
   }
@@ -433,7 +443,7 @@ export class PipelineService {
 
   /** Creates the first planner task (with the code map lookup, if any) and records it on the pipeline (not saved). */
   private startPlanner(p: Pipeline, codeMap: { keywords: string[]; text: string } | null, setup = this.setup(), gameScan: string | null = this.d.scan?.().summary ?? null): Pipeline {
-    const t = this.d.queue.create({ kind: 'prompt', prompt: plannerPrompt(p.request, this.d.skills(), p.rigor, setup, gameScan, this.templates(), codeMap, this.roles(), p.roles ?? null), permissionMode: 'default', ...(p.model ? { model: p.model } : {}) });
+    const t = this.d.queue.create({ kind: 'prompt', prompt: plannerPrompt(p.request, this.d.skills(), p.rigor, setup, gameScan, this.templates(), codeMap, this.roles(), p.roles ?? null), permissionMode: 'default', ...(p.model ? { model: p.model } : {}), ...attachOf(p) });
     p.planTaskId = t.id; p.planTasks = [...(p.planTasks ?? []), t.id];
     return p;
   }
@@ -586,6 +596,7 @@ export class PipelineService {
       const t = this.d.queue.create({
         ...(next.skill ? { kind: 'skill' as const, skill: next.skill, args: next.args ?? undefined } : { kind: 'prompt' as const, prompt: next.prompt ?? '' }),
         permissionMode: p.permissionMode, ...(p.model ? { model: p.model } : {}), ...(p.sessionId ? { resumeOf: p.sessionId } : {}),
+        ...attachOf(p),
       });
       next.status = 'running'; next.taskId = t.id;
     } catch (e) {
@@ -655,7 +666,7 @@ export class PipelineService {
     const round: CritiqueRound = { round: rounds.length + 1, planTaskId: p.planTaskId, taskId: null, ok: null, issues: [], error: null, revised: false, epoch: p.replans ?? 0 };
     rounds.push(round);
     try {
-      const t = this.d.queue.create({ kind: 'prompt', prompt: criticPrompt(p, round.round, this.templates(), this.roles()), permissionMode: 'default', ...(p.model ? { model: p.model } : {}) });
+      const t = this.d.queue.create({ kind: 'prompt', prompt: criticPrompt(p, round.round, this.templates(), this.roles()), permissionMode: 'default', ...(p.model ? { model: p.model } : {}), ...attachOf(p) });
       round.taskId = t.id; p.critiqueTaskId = t.id; p.status = 'critiquing';
       p.note = `Đang phản biện kế hoạch (vòng ${round.round}).`;
       this.save(p);

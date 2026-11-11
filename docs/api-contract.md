@@ -212,3 +212,20 @@ Màn **Hệ thống → Cài package** (`/setup`). Lệnh cài cố định tron
 - **Package và lệnh:** `claude` (installer `irm https://claude.ai/install.ps1 | iex`), `git` (winget `Git.Git`), `vsbuild` (winget `Microsoft.VisualStudio.2022.BuildTools`, hỏi lại trước khi cài), `uv` (installer `astral.sh/uv/install.ps1`), `graphify` (`uv tool install --force graphifyy[mcp]==0.9.103`). `node`, `login`, `unity-mcp` chỉ kiểm tra, không cài.
 - **Live:** event `setup:job` gửi cả `SetupJob` (log tối đa 400 dòng, đã bỏ mã ANSI và dòng thanh tiến độ), gửi tối đa mỗi 300 ms khi có log mới và ngay khi đổi trạng thái.
 - **Sau khi cài xong:** server đọc lại PATH để lệnh mới dùng được ngay. Cài lại Claude Code thì Studio đọc lại phiên bản Claude. Thời gian tối đa mỗi lệnh 45 phút.
+
+## 10. Tệp đính kèm (2026-11-11)
+
+Đính kèm ảnh hoặc tệp vào **Task Center** (tạo task, tiếp tục session) và **Lập kế hoạch → Yêu cầu mới**. Web tải từng tệp lên ngay khi chọn, kéo thả hoặc Ctrl+V. Form chỉ gửi danh sách `id`.
+
+| Method | Path | Mô tả |
+|---|---|---|
+| POST | `/api/attachments` `{name, data}` | `data` là tệp mã hoá base64. Trả `Attachment {id, name, size, mime, path}`. 400: loại tệp không nhận, tệp rỗng, hoặc quá 10 MB |
+| GET | `/api/attachments/:id/file` | Trả tệp với `Content-Type` theo đuôi, `nosniff`, `inline`. Dùng cho ảnh thu nhỏ. 404 khi id lạ |
+
+- **Loại tệp nhận:** png, jpg, jpeg, gif, webp, pdf, md, txt, csv, json (`ATTACH_TYPES` trong shared). Không nhận `.xlsx`, vì Claude không đọc trực tiếp được. Tối đa 10 tệp mỗi lệnh (`ATTACH_MAX_FILES`), mỗi tệp tối đa 10 MB (`ATTACH_MAX_BYTES`).
+- **Chỗ lưu:** `~/.ccgs-studio/attachments/<id>/<tên>`, không ghi vào project game. Tên tệp bỏ thư mục và các ký tự Windows không cho phép, dài tối đa 120 ký tự. Tệp được giữ lại, không tự xoá theo task.
+- **Body có thêm `attachments?: string[]`:** `POST /api/tasks` (`NewTask`), `POST /api/tasks/:id/resume`, `POST /api/pipelines` (`NewPipeline`). Id lạ hoặc tệp đã bị xoá thì trả 400.
+- **Lưu lại:** `Task.attachments: Attachment[] | null` ở cột `tasks.attachments`. `Pipeline.attachments?: Attachment[]`.
+- **Gửi cho Claude:** `prompt` lưu trong DB giữ nguyên. Runner nối thêm đoạn "Attached files: …" kèm đường dẫn từng tệp vào prompt gửi SDK, rồi thêm thư mục chứa tệp vào `additionalDirectories`. Nhờ vậy Claude mở được tệp bằng `Read` mà không phải hỏi quyền. Với task skill, đoạn này nằm sau tham số.
+- **Kế hoạch:** tệp đính kèm được đưa vào task planner, task phản biện và mọi bước khi chạy. Không đưa vào lượt sửa kế hoạch (`/revise`, `/replan`), vì các lượt này resume session đã có tệp.
+- **Web:** `@ccgs/shared` giờ có hằng số chạy lúc runtime. Vì vậy `vite.config.ts` trỏ alias `@ccgs/shared` sang `packages/shared/src/index.ts`; bản dist CommonJS chỉ dành cho server.

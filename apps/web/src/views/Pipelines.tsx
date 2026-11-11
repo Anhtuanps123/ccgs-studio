@@ -6,6 +6,7 @@ import { api, live, useApi } from '../api';
 import { Status, when } from '../monitor';
 import { fmtNum, fmtUsd, totalTok } from '../insights';
 import { PermissionBox, QuestionBox, useTaskData } from './Tasks';
+import { AttachBar, AttachList, useAttachments } from '../attachments';
 
 const MODES: [PipelineMode, string, string][] = [
   ['auto', 'Tự chạy hết', 'Duyệt kế hoạch một lần, các bước chạy liền nhau; chỉ dừng khi Claude hỏi hoặc một bước lỗi.'],
@@ -84,12 +85,13 @@ function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
   const started = !!setup.data?.started;
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const att = useAttachments();
   useEffect(() => { if (settings.data) setPerm(settings.data.taskDefaults.permissionMode); }, [settings.data]);
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      const p = await api<Pipeline>('/api/pipelines', { method: 'POST', body: JSON.stringify({ request, mode, permissionMode: perm, model: model || null, rigor, critic, codeKeywords: keywords.trim() || undefined, ...(allRoles.length && roles ? { roles } : {}) }) });
-      setRequest(''); setKeywords(''); onCreated(p.id);
+      const p = await api<Pipeline>('/api/pipelines', { method: 'POST', body: JSON.stringify({ request, mode, permissionMode: perm, model: model || null, rigor, critic, codeKeywords: keywords.trim() || undefined, ...(allRoles.length && roles ? { roles } : {}), ...(att.ids.length ? { attachments: att.ids } : {}) }) });
+      setRequest(''); setKeywords(''); att.clear(); onCreated(p.id);
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   return (
@@ -102,8 +104,10 @@ function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
         </div>)}
       {started && setup.data?.source === 'session' && <p className="small muted" style={{ marginTop: 0 }}>Đã chạy /start trong phiên nhưng không lưu project.yaml: rigor mặc định {setup.data?.rigor}, chọn lại bên dưới nếu cần.</p>}
       {started && setup.data?.source !== 'session' && <p className="small muted" style={{ marginTop: 0 }}>Đã chạy /start: stage {setup.data?.stage ?? 'Unknown'}, rigor {setup.data?.rigor}, tự động {setup.data?.automation ?? 'Unknown'}.</p>}
-      <div className="field"><label htmlFor="pl-req">Bạn muốn làm gì?</label>
-        <textarea id="pl-req" value={request} onChange={e => setRequest(e.target.value)} placeholder="Ví dụ: Tôi muốn tạo chức năng Lucky Spin: 1 lượt quay miễn phí mỗi ngày, thêm lượt qua quảng cáo" style={{ minHeight: 90 }} /></div>
+      <div className="field" {...att.zone}><label htmlFor="pl-req">Bạn muốn làm gì?</label>
+        <textarea id="pl-req" value={request} onChange={e => setRequest(e.target.value)} placeholder="Ví dụ: Tôi muốn tạo chức năng Lucky Spin: 1 lượt quay miễn phí mỗi ngày, thêm lượt qua quảng cáo" style={{ minHeight: 90 }} />
+        <AttachBar att={att} />
+        {att.items.length > 0 && <span className="hint">Claude xem các tệp này khi lập kế hoạch, khi phản biện và ở mọi bước chạy.</span>}</div>
       <div className="field"><label htmlFor="pl-kw">Từ khoá mã nguồn (không bắt buộc)</label>
         <input type="text" id="pl-kw" value={keywords} onChange={e => setKeywords(e.target.value)} placeholder="Ví dụ: PiggyBank, DailyLoginManager" />
         <span className="hint">Tên lớp/hàm trong code, cách nhau bằng dấu phẩy. Studio tra bản đồ code (graphify) cho các tên này rồi đưa kết quả cho Claude lập kế hoạch. Để trống thì Studio tự lấy các tên dạng PascalCase/camelCase trong câu yêu cầu; không có tên nào thì không tra.</span></div>
@@ -133,7 +137,7 @@ function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
       </div>
       <label className="opt" style={{ marginBottom: 8 }}><input type="checkbox" checked={critic} onChange={e => setCritic(e.target.checked)} /><div><b>Phản biện kế hoạch</b><div className="small muted">Soát kế hoạch theo góc nhìn producer (chỉ đọc). Nếu thấy lỗi, planner sửa lại, tối đa 2 lần. Tốn thêm token.</div></div></label>
       <p className="small muted" style={{ marginTop: 0 }}>Bước đầu Claude chỉ đọc project để lập kế hoạch, không sửa file. Bạn xem và sửa kế hoạch trước khi chạy.</p>
-      <div className="row"><button className="btn primary" disabled={busy || !request.trim() || !started || noRole} onClick={submit}>Lập kế hoạch</button>{err && <span className="badge-err">{err}</span>}</div>
+      <div className="row"><button className="btn primary" disabled={busy || att.busy || !request.trim() || !started || noRole} onClick={submit}>Lập kế hoạch</button>{err && <span className="badge-err">{err}</span>}</div>
     </div></div>
   );
 }
@@ -234,6 +238,7 @@ function Detail({ p, onDeleted }: { p: Pipeline; onDeleted: () => void }) {
           <h3 style={{ whiteSpace: 'pre-wrap' }}>{p.request}</h3></div><span>{p.rigor && <span className="tag">rigor {p.rigor}</span>} <PBadge s={p.status} /></span></div>
         <div className="panel-b stack">
           {p.summary && <div>{p.summary}</div>}
+          {!!p.attachments?.length && <AttachList items={p.attachments} />}
           {p.roles?.length ? <div className="small muted">Vai trò: {p.roles.map(id => roles.find(r => r.id === id)?.title ?? id).join(', ')}</div> : null}
           {p.note && <div className="small">{p.note}</div>}
           <GraphUse p={p} />

@@ -117,6 +117,7 @@ const MIGRATIONS: [table: string, column: string, ddl: string][] = [
   ['tasks', 'session_cost_usd', 'REAL'], // SDK running total of the session after this task
   ['tasks', 'context_tokens', 'INTEGER'], // context size of the task's last turn (decides /compact before a resume)
   ['tasks', 'mcp', 'TEXT'], // JSON TaskMcp: MCP servers attached to the task and their call counts
+  ['tasks', 'attachments', 'TEXT'], // JSON Attachment[]: files the user attached
 ];
 
 /** Opens (and creates) the Studio database. Use ':memory:' in tests. */

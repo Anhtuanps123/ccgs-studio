@@ -5,6 +5,7 @@ import type { NewTask, PendingInteraction, PermissionMode, QuestionSpec, Session
 import { api, live, useApi } from '../api';
 import { Duration, Status, when } from '../monitor';
 import { DiffView, UsageTable, fmtUsd, parseGitDiff } from '../insights';
+import { AttachBar, AttachList, useAttachments } from '../attachments';
 
 /** Refetch (throttled) on any task / interaction event. */
 export function useTaskData() {
@@ -148,17 +149,21 @@ function ResumeForm({ t, onDone }: { t: Task; onDone: () => void }) {
   const [text, setText] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const att = useAttachments();
   if (!t.sessionId) return null;
   const send = async () => {
     setBusy(true); setErr(null);
-    try { await api(`/api/tasks/${t.id}/resume`, { method: 'POST', body: JSON.stringify({ prompt: text }) }); setText(''); onDone(); }
-    catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+    try {
+      await api(`/api/tasks/${t.id}/resume`, { method: 'POST', body: JSON.stringify({ prompt: text, ...(att.ids.length ? { attachments: att.ids } : {}) }) });
+      setText(''); att.clear(); onDone();
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   return (
-    <div className="stack" style={{ gap: 6 }}>
+    <div className="stack" style={{ gap: 6 }} {...att.zone}>
       <label className="muted small" htmlFor={`res-${t.id}`}>Tiếp tục session này với prompt mới (task mới vào hàng đợi, Claude nhớ hội thoại cũ)</label>
       <textarea id={`res-${t.id}`} value={text} onChange={e => setText(e.target.value)} placeholder="Ví dụ: Sửa thêm phần test bị lỗi" style={{ minHeight: 60 }} />
-      <div className="row"><button className="btn" disabled={busy || !text.trim()} onClick={send}>Tiếp tục session</button>{err && <span className="badge-err">{err}</span>}</div>
+      <AttachBar att={att} />
+      <div className="row"><button className="btn" disabled={busy || att.busy || !text.trim()} onClick={send}>Tiếp tục session</button>{err && <span className="badge-err">{err}</span>}</div>
     </div>
   );
 }
@@ -193,6 +198,7 @@ function Result({ t }: { t: Task }) {
       {t.error && <div className="badge-err">{t.error}</div>}
       <div className="small muted">Model {t.model ?? 'mặc định'} · Chi phí {fmtUsd(t.costUsd)}{t.costUsd !== null ? ' (ước tính theo giá niêm yết, do SDK báo)' : ''}{t.compactCostUsd != null ? ` · /compact trước task ${fmtUsd(t.compactCostUsd)}` : ''}{t.resumeOf ? ` · Tiếp tục session ${t.resumeOf.slice(0, 8)}` : ''}</div>
       <TaskCodeMap t={t} />
+      {!!t.attachments?.length && <div><div className="muted small">Tệp đính kèm</div><AttachList items={t.attachments} /></div>}
       <div><div className="muted small">Phản hồi cuối</div><pre className="md" style={{ margin: '4px 0 0' }}>{t.resultText ?? (t.status === 'cancelled' ? 'Task bị dừng trước khi trả lời.' : 'Unknown')}</pre></div>
       <div><div className="muted small">File đã thay đổi</div>
         {t.changedFiles === null ? <div className="small">Unknown (project không phải git repo hoặc không đọc được git status)</div>
@@ -216,17 +222,18 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
   const def = settings.data?.taskDefaults;
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const att = useAttachments();
   useEffect(() => { const s = sp.get('skill'); if (s) setSkill(s); }, [sp]);
   const hint = skills.data?.find(s => s.name === skill)?.argumentHint;
 
   const submit = async () => {
     // Empty choices are left out so the server applies the task defaults (S-03).
-    const extra = { ...(model ? { model } : {}), ...(mode ? { permissionMode: mode } : {}) };
+    const extra = { ...(model ? { model } : {}), ...(mode ? { permissionMode: mode } : {}), ...(att.ids.length ? { attachments: att.ids } : {}) };
     const body: NewTask = skill ? { kind: 'skill', skill, args: text, ...extra } : { kind: 'prompt', prompt: text, ...extra };
     setBusy(true); setErr(null);
     try {
       await api('/api/tasks', { method: 'POST', body: JSON.stringify(body) });
-      setText('');
+      setText(''); att.clear();
       if (sp.get('skill')) setSp({});
       onCreated();
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
@@ -240,8 +247,9 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
           {skill && !skills.data?.some(s => s.name === skill) && <option value={skill}>/{skill}</option>}
           {(skills.data ?? []).filter(s => s.hasSkillMd && s.userInvocable !== false).map(s => <option key={s.dir} value={s.name}>/{s.name}</option>)}
         </select></div>
-      <div className="field"><label htmlFor="t-prompt">{skill ? 'Tham số' : 'Prompt'}</label>
-        <textarea id="t-prompt" value={text} onChange={e => setText(e.target.value)} placeholder={skill ? hint ?? 'Không bắt buộc' : 'Ví dụ: Viết test cho hệ thống inventory'} /></div>
+      <div className="field" {...att.zone}><label htmlFor="t-prompt">{skill ? 'Tham số' : 'Prompt'}</label>
+        <textarea id="t-prompt" value={text} onChange={e => setText(e.target.value)} placeholder={skill ? hint ?? 'Không bắt buộc' : 'Ví dụ: Viết test cho hệ thống inventory'} />
+        <AttachBar att={att} /></div>
       <div className="row" style={{ alignItems: 'flex-start' }}>
         <div className="field" style={{ flex: 1, minWidth: 120 }}><label htmlFor="t-model">Model</label>
           <select id="t-model" value={model} onChange={e => setModel(e.target.value)}>
@@ -252,7 +260,7 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
             {MODES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
       </div>
       {def?.maxRuntimeMin && <p className="small muted" style={{ marginTop: 0 }}>Task chạy quá {def.maxRuntimeMin} phút sẽ bị dừng (đổi ở Cài đặt).</p>}
-      <div className="row"><button className="btn primary" onClick={submit} disabled={busy || (!skill && !text.trim())}>Thêm vào hàng đợi</button>{err && <span className="badge-err">{err}</span>}</div>
+      <div className="row"><button className="btn primary" onClick={submit} disabled={busy || att.busy || (!skill && !text.trim())}>Thêm vào hàng đợi</button>{err && <span className="badge-err">{err}</span>}</div>
     </div></div>
   );
 }
@@ -296,6 +304,7 @@ export function Tasks() {
                 {!mine.length && <p className="muted" style={{ margin: 0 }}>Không có câu hỏi nào đang chờ. Task đang chạy tiếp.</p>}
                 <div className="row small muted">Đã chạy <Duration ms={null} start={cur.startedAt} status={cur.status} />. Model {cur.model ?? 'mặc định'}, quyền {MODES.find(m => m[0] === cur.permissionMode)?.[1]}.
                   {cur.sessionId && <Link to={`/live?s=${cur.sessionId}`}>Xem session trực tiếp</Link>}</div>
+                {!!cur.attachments?.length && <AttachList items={cur.attachments} />}
               </div>
             </div>
           ) : <div className="panel"><div className="empty">Không có task đang chạy.</div></div>}

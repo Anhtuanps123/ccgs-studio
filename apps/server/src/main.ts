@@ -19,6 +19,8 @@ import { HooksController } from './hooks/hooks.controller';
 import { HookInstaller } from './hooks/hook-installer';
 import { TaskQueue } from './tasks/task-queue';
 import { TasksController } from './tasks/tasks.controller';
+import { AttachmentStore } from './tasks/attachments';
+import { AttachmentsController } from './tasks/attachments.controller';
 import { sdkRunner } from './tasks/runner';
 import { baseRef, takeSnapshot, taskDiffs } from './tasks/git-snapshot';
 import { summarizeInput } from './monitor/projector';
@@ -36,9 +38,10 @@ import { GraphController } from './graph/graph.controller';
 const PORT = Number(process.env.PORT ?? 4310);
 
 @Module({
-  controllers: [CcgsController, SystemController, IngestController, MonitorController, HooksController, TasksController, InsightsController, PipelinesController, ScanController, AlertsController, GraphController, SetupController],
+  controllers: [CcgsController, SystemController, IngestController, MonitorController, HooksController, TasksController, InsightsController, PipelinesController, ScanController, AlertsController, GraphController, SetupController, AttachmentsController],
   providers: [
     SettingsService, CcgsAdapterService, LiveGateway, MonitorService,
+    { provide: AttachmentStore, inject: [SettingsService], useFactory: (s: SettingsService) => new AttachmentStore(path.join(s.dir, 'attachments')) },
     {
       provide: HookInstaller,
       inject: [SettingsService],
@@ -46,11 +49,11 @@ const PORT = Number(process.env.PORT ?? 4310);
     },
     {
       provide: TaskQueue,
-      inject: [SettingsService, MonitorService, HookInstaller],
-      useFactory: (s: SettingsService, m: MonitorService, h: HookInstaller) => {
+      inject: [SettingsService, MonitorService, HookInstaller, AttachmentStore],
+      useFactory: (s: SettingsService, m: MonitorService, h: HookInstaller, att: AttachmentStore) => {
         const project = () => { const p = s.get().projectPath; return p && projectInfo(p).valid ? p : null; };
         return new TaskQueue({
-          db: m.db, project, snapshot: takeSnapshot, baseRef, diffs: taskDiffs,
+          db: m.db, project, snapshot: takeSnapshot, baseRef, diffs: taskDiffs, attachments: att,
           defaults: () => s.get().taskDefaults, sessionExists: id => !!m.getSession(id),
           autoAllow: {
             has: tool => tool !== 'AskUserQuestion' && (s.get().autoAllow ?? []).some(x => x === '*' || x === tool),
@@ -79,9 +82,9 @@ const PORT = Number(process.env.PORT ?? 4310);
     },
     {
       provide: PipelineService,
-      inject: [MonitorService, TaskQueue, CcgsAdapterService, SettingsService, GameScanService, GraphService],
-      useFactory: (m: MonitorService, q: TaskQueue, a: CcgsAdapterService, st: SettingsService, gs: GameScanService, g: GraphService) => new PipelineService({
-        db: m.db, queue: q, scan: () => gs.get(), graph: g,
+      inject: [MonitorService, TaskQueue, CcgsAdapterService, SettingsService, GameScanService, GraphService, AttachmentStore],
+      useFactory: (m: MonitorService, q: TaskQueue, a: CcgsAdapterService, st: SettingsService, gs: GameScanService, g: GraphService, att: AttachmentStore) => new PipelineService({
+        db: m.db, queue: q, scan: () => gs.get(), graph: g, attachments: att,
         project: () => { const p = st.get().projectPath; return p && projectInfo(p).valid ? p : null; },
         skills: () => (a.snapshot?.skills ?? []).filter(s => s.hasSkillMd && s.userInvocable !== false)
           .map(s => ({ name: s.name, description: s.description, argumentHint: s.argumentHint })).concat(studioSkills()),

@@ -2,6 +2,7 @@
 // so tests can swap in a fake.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { STUDIO_PLUGIN_DIR } from '../studio-plugin';
+import { attachmentDirs, withAttachments } from './attachments';
 import type { PermissionDecision, PendingInteraction, QuestionAnswer, Task } from '@ccgs/shared';
 
 export type InteractionRequest = Omit<PendingInteraction, 'id' | 'taskId' | 'createdAt'>;
@@ -191,6 +192,7 @@ export function sdkRunner(cfg: SdkRunnerConfig): Runner {
             abortController: abort,
             canUseTool,
             ...extrasOptions(opts?.extras),
+            ...(task.attachments?.length ? { additionalDirectories: attachmentDirs(task.attachments) } : {}),
             spawnClaudeCodeProcess: (o: any) => {
               child = spawn(o.command, o.args, { cwd: o.cwd, env: o.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, signal: o.signal });
               child.stderr?.on('data', (d: Buffer) => { stderrTail = (stderrTail + d.toString('utf8')).slice(-2000); });
@@ -215,7 +217,7 @@ export function sdkRunner(cfg: SdkRunnerConfig): Runner {
           } catch (e) { hooks.log('warn', `/compact lỗi, chạy task trên session chưa compact: ${(e as Error).message}`); }
         }
         if (abort.signal.aborted) throw new Error('Task bị dừng');
-        q = query({ prompt: task.prompt, options: { ...options, ...(resume ? { resume } : {}) } });
+        q = query({ prompt: withAttachments(task.prompt, task.attachments), options: { ...options, ...(resume ? { resume } : {}) } });
         for await (const m of q) {
           if (m.session_id && m.session_id !== sessionId) { sessionId = m.session_id; hooks.onSession(m.session_id); }
           askCtx.see(m);

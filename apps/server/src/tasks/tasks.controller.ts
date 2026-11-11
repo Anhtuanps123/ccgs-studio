@@ -38,7 +38,9 @@ export class TasksController {
     return { baseRef: t.baseRef, files: this.q.diffs(id) ?? [] };
   }
   /** T-TC-07 */
-  @Post('tasks/:id/resume') resume(@Param('id') id: string, @Body() b: { prompt?: string }) { return wrap(() => this.q.resume(id, String(b?.prompt ?? ''))); }
+  @Post('tasks/:id/resume') resume(@Param('id') id: string, @Body() b: { prompt?: string; attachments?: string[] }) {
+    return wrap(() => this.q.resume(id, String(b?.prompt ?? ''), b?.attachments ?? undefined));
+  }
   /** M-PF-02 per task */
   @Get('tasks/:id/usage') usage(@Param('id') id: string) {
     const t = this.one(id);

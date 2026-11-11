@@ -273,6 +273,8 @@ export interface Task {
   /** T-TC-06: commit the diff is taken against (git stash create / HEAD); null when unknown. */ baseRef: string | null;
   /** MCP servers Studio attached to this task (for example graphify); null for tasks run before this existed. */
   mcp?: TaskMcp | null;
+  /** Files the user attached; their paths are appended to the prompt sent to Claude (not stored in `prompt`). */
+  attachments?: Attachment[] | null;
 }
 /**
  * servers: names of the MCP servers attached (empty when none). note: Vietnamese, why (not) attached.
@@ -281,7 +283,17 @@ export interface Task {
  */
 export interface TaskMcp { servers: string[]; note: string | null; calls: Record<string, number> | null }
 /** resumeOf: session id to continue (T-TC-07). Unset fields take the task defaults (S-03). */
-export interface NewTask { kind: 'prompt' | 'skill'; skill?: string; args?: string; prompt?: string; model?: string | null; permissionMode?: PermissionMode; resumeOf?: string; }
+export interface NewTask { kind: 'prompt' | 'skill'; skill?: string; args?: string; prompt?: string; model?: string | null; permissionMode?: PermissionMode; resumeOf?: string; attachments?: string[]; }
+
+/** A file the user attached to a request, stored under ~/.ccgs-studio/attachments/<id>/. Claude opens it with Read. */
+export interface Attachment { id: string; name: string; size: number; mime: string; path: string }
+export const ATTACH_MAX_BYTES = 10 * 1024 * 1024;
+export const ATTACH_MAX_FILES = 10;
+/** Extensions Claude's Read tool opens directly (images, PDF, text), with the type served back to the browser. */
+export const ATTACH_TYPES: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf',
+  md: 'text/markdown', txt: 'text/plain', csv: 'text/csv', json: 'application/json',
+};
 
 export interface QuestionSpec { question: string; header?: string; multiSelect: boolean; options: { label: string; description?: string }[] }
 export interface PendingInteraction {
@@ -408,6 +420,8 @@ export interface Pipeline {
   codeKeywords?: string[];
   /** Code map lookup done before the first plan; null while it runs (planTaskId is null then). */
   graph?: PipelineGraphContext | null;
+  /** Files attached to the request: given to the planner, the critic and every step. */
+  attachments?: Attachment[];
 }
 /** One finding of the plan check (apps/server/src/pipelines/plan-rules.ts). */
 export interface PlanIssue { level: 'error' | 'warn' | 'info'; rule: string; message: string; stepId: string | null }
@@ -432,7 +446,7 @@ export interface CritiqueRound {
 export type Rigor = 'minimal' | 'standard' | 'full';
 /** codeKeywords: "Từ khoá mã nguồn (không bắt buộc)", identifiers separated by commas or spaces; when set they replace the ones found in the request. */
 /** roles: ids from GET /api/pipelines/roles; omitted or every id = no role filter. */
-export interface NewPipeline { request: string; mode?: PipelineMode; permissionMode?: PermissionMode; model?: string | null; rigor?: Rigor; critic?: boolean; codeKeywords?: string; roles?: string[] }
+export interface NewPipeline { request: string; mode?: PipelineMode; permissionMode?: PermissionMode; model?: string | null; rigor?: Rigor; critic?: boolean; codeKeywords?: string; roles?: string[]; attachments?: string[] }
 /** What /start has recorded in project.yaml. `started` is false while modes.rigor is unset. */
 /** source: where "started" came from — project.yaml (modes.rigor) or a /start that finished in Studio without saving. */
 export interface PipelineSetup { started: boolean; rigor: Rigor | null; stage: string | null; automation: string | null; error: string | null; source?: 'project.yaml' | 'session' | null; startedAt?: string | null }
