@@ -37,6 +37,7 @@ Ghi chú cho mục 8: ở máy công ty, `UnityMCP` được đăng ký ở **us
 | Cần có | Cài bằng | Dùng để |
 |---|---|---|
 | **graphify 0.9.103** kèm MCP (cần [uv](https://docs.astral.sh/uv/); máy công ty dùng uv 0.13.5 và Python 3.14.7) | `uv tool install "graphifyy[mcp]==0.9.103"` | Bản đồ code: Claude tra class, method, file:dòng thay vì đọc cả file. Không có thì Studio vẫn chạy như cũ. **Không cài vào project game.** Studio dựng đồ thị ở `~/.ccgs-studio/projects/<id>/graphify`. |
+| **context-mode 2.1.8** (plugin Claude Code, giấy phép ELv2) | Có sẵn sau `npm install`, vì nằm trong `apps/server/package.json`. Thiếu thì bấm **Cài** ở màn Cài package (chạy `npm install context-mode@2.1.8 --save-exact -w apps/server` trong thư mục Studio) | Giữ kết quả công cụ lớn (file dài, log) ngoài context của task. Bật ở **Cài đặt → Tiết kiệm context (context-mode)**, mặc định tắt. Không cài vào Claude Code toàn máy hay project game. Báo lỗi EPERM khi cài: tắt Studio, chạy `npm install`, mở lại. |
 | **Arize Phoenix** chạy ở `http://127.0.0.1:6006` | Theo hướng dẫn của Phoenix | Gửi trace của session sang Phoenix (bật trong Cài đặt). Mặc định đang tắt. |
 
 Nếu đã cài graphify mà Kiểm tra môi trường báo `graphify-mcp` không chạy được, hãy cài lại:

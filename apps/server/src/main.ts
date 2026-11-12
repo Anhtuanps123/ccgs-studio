@@ -22,6 +22,7 @@ import { TasksController } from './tasks/tasks.controller';
 import { AttachmentStore } from './tasks/attachments';
 import { AttachmentsController } from './tasks/attachments.controller';
 import { sdkRunner } from './tasks/runner';
+import { contextModeDir } from './context-mode';
 import { baseRef, takeSnapshot, taskDiffs } from './tasks/git-snapshot';
 import { summarizeInput } from './monitor/projector';
 import { configureRedaction } from './monitor/redact';
@@ -59,7 +60,8 @@ const PORT = Number(process.env.PORT ?? 4310);
             has: tool => tool !== 'AskUserQuestion' && (s.get().autoAllow ?? []).some(x => x === '*' || x === tool),
             add: tool => { const cur = s.get().autoAllow ?? []; if (!cur.includes(tool)) s.update({ autoAllow: [...cur, tool] }); },
           },
-          runner: sdkRunner({ cwd: () => project() ?? process.cwd(), settingsFile: h.studioSettingsFile(), summarize: (t, i) => summarizeInput(t, i, project()) }),
+          runner: sdkRunner({ cwd: () => project() ?? process.cwd(), settingsFile: h.studioSettingsFile(), summarize: (t, i) => summarizeInput(t, i, project()),
+            plugins: () => { const d = s.get().contextMode ? contextModeDir() : null; return d ? [d] : []; } }),
         });
       },
     },

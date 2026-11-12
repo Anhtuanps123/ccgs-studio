@@ -66,6 +66,8 @@ export interface SystemStatus {
   claude: { command: string; version: string | null; error: string | null };
   studioHooksInstalled: boolean;
   lastEventAt: string | null; // Phase 2
+  /** Version of the context-mode plugin bundled with the server; null when not installed. */
+  contextModeVersion?: string | null;
 }
 
 /**
@@ -86,6 +88,8 @@ export interface StudioSettings {
   autoAllow: string[];
   /** Code map (graphify). Optional in saved files; the server fills the defaults. */
   graphify?: GraphSettings;
+  /** Load the context-mode plugin (MCP + hooks that keep large tool output out of the context) into tasks. Off when missing. */
+  contextMode?: boolean;
 }
 
 // ---------- Code map (graphify, run from outside the project) ----------

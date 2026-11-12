@@ -209,7 +209,7 @@ Màn **Hệ thống → Cài package** (`/setup`). Lệnh cài cố định tron
 | POST | `/api/setup/job/cancel` | Dừng lệnh đang chạy (`taskkill /T /F`). 400 khi không có lệnh nào chạy |
 | POST | `/api/setup/login` | Mở cửa sổ terminal chạy `claude` để gõ `/login` |
 
-- **Package và lệnh:** `claude` (installer `irm https://claude.ai/install.ps1 | iex`), `git` (winget `Git.Git`), `vsbuild` (winget `Microsoft.VisualStudio.2022.BuildTools`, hỏi lại trước khi cài), `uv` (installer `astral.sh/uv/install.ps1`), `graphify` (`uv tool install --force graphifyy[mcp]==0.9.103`). `node`, `login`, `unity-mcp` chỉ kiểm tra, không cài.
+- **Package và lệnh:** `claude` (installer `irm https://claude.ai/install.ps1 | iex`), `git` (winget `Git.Git`), `vsbuild` (winget `Microsoft.VisualStudio.2022.BuildTools`, hỏi lại trước khi cài), `uv` (installer `astral.sh/uv/install.ps1`), `graphify` (`uv tool install --force graphifyy[mcp]==0.9.103`), `context-mode` (`cmd.exe /d /c npm install context-mode@2.1.8 --save-exact --no-audit --no-fund -w apps/server`, chạy trong thư mục gốc Studio; kiểm tra bằng `.claude-plugin/plugin.json` của gói, xem §11). `node`, `login`, `unity-mcp` chỉ kiểm tra, không cài.
 - **Live:** event `setup:job` gửi cả `SetupJob` (log tối đa 400 dòng, đã bỏ mã ANSI và dòng thanh tiến độ), gửi tối đa mỗi 300 ms khi có log mới và ngay khi đổi trạng thái.
 - **Sau khi cài xong:** server đọc lại PATH để lệnh mới dùng được ngay. Cài lại Claude Code thì Studio đọc lại phiên bản Claude. Thời gian tối đa mỗi lệnh 45 phút.
 
@@ -229,3 +229,12 @@ Màn **Hệ thống → Cài package** (`/setup`). Lệnh cài cố định tron
 - **Gửi cho Claude:** `prompt` lưu trong DB giữ nguyên. Runner nối thêm đoạn "Attached files: …" kèm đường dẫn từng tệp vào prompt gửi SDK, rồi thêm thư mục chứa tệp vào `additionalDirectories`. Nhờ vậy Claude mở được tệp bằng `Read` mà không phải hỏi quyền. Với task skill, đoạn này nằm sau tham số.
 - **Kế hoạch:** tệp đính kèm được đưa vào task planner, task phản biện và mọi bước khi chạy. Không đưa vào lượt sửa kế hoạch (`/revise`, `/replan`), vì các lượt này resume session đã có tệp.
 - **Web:** `@ccgs/shared` giờ có hằng số chạy lúc runtime. Vì vậy `vite.config.ts` trỏ alias `@ccgs/shared` sang `packages/shared/src/index.ts`; bản dist CommonJS chỉ dành cho server.
+
+## 11. context-mode (2026-11-12)
+
+Plugin npm `context-mode` (đã cài kèm `apps/server`) giữ kết quả công cụ lớn ngoài context của agent.
+
+- **`StudioSettings.contextMode?: boolean`:** mặc định `false`. Gửi qua `PUT /api/settings`; chỉ đúng giá trị `true` mới bật.
+- **`SystemStatus.contextModeVersion?: string | null`:** phiên bản trong `.claude-plugin/plugin.json` của gói đã cài, `null` khi chưa cài.
+- **Runner:** khi bật và gói có mặt, `plugins` của SDK là `[studio, context-mode]`; áp dụng cho task bắt đầu sau khi lưu. Gói thiếu thì task chạy như khi tắt.
+- Plugin thêm MCP server `context-mode` (công cụ `mcp__plugin_context-mode_context-mode__ctx_*`) và hook của nó; dữ liệu nằm ở `~/.context-mode` trên máy.

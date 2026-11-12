@@ -129,6 +129,8 @@ export interface SdkRunnerConfig {
   /** Settings file with the Studio hook (origin "studio"); merged by Claude Code with the project's own. */
   settingsFile: string;
   summarize: (tool: string, input: unknown) => string;
+  /** More local plugin folders for each task, read when the task starts (for example context-mode). */
+  plugins?: () => string[];
 }
 
 // The server is CommonJS and the SDK is ESM-only: keep a real import() through tsc.
@@ -187,7 +189,7 @@ export function sdkRunner(cfg: SdkRunnerConfig): Runner {
             permissionMode: task.permissionMode,
             settingSources: ['user', 'project', 'local'],
             settings: cfg.settingsFile,
-            plugins: [{ type: 'local' as const, path: STUDIO_PLUGIN_DIR }],
+            plugins: [STUDIO_PLUGIN_DIR, ...(cfg.plugins?.() ?? [])].map(p => ({ type: 'local' as const, path: p })),
             env: { ...process.env, CCGS_STUDIO_TASK_ID: task.id },
             abortController: abort,
             canUseTool,

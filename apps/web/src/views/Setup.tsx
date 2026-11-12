@@ -80,6 +80,7 @@ export function Setup() {
                             onClick={() => void post('/api/setup/login')}>Mở terminal</button>
                         )}
                         {p.id === 'unity-mcp' && <button className="btn" onClick={recheck} disabled={checking}>Kiểm tra lại</button>}
+                        {p.id === 'context-mode' && p.installed && <Link className="btn" to="/preferences">Bật trong Cài đặt</Link>}
                       </div>
                     </li>
                   );

@@ -9,6 +9,7 @@ import { CcgsAdapterService } from '../ccgs/adapter.service';
 import { checkProject } from '../ccgs/parser';
 import { LiveGateway } from '../live/live.gateway';
 import { MonitorService } from '../monitor/monitor.service';
+import { contextModeVersion } from '../context-mode';
 
 export function projectInfo(p: string | null): ProjectInfo {
   if (!p) return { path: null, name: null, valid: false, checks: [] };
@@ -51,6 +52,7 @@ export class SystemController {
       claude: { command: s.claudeCommand, ...versionCache.v },
       studioHooksInstalled: hooks.some(h => h.owner === 'studio'),
       lastEventAt: this.monitor.lastEventAt,
+      contextModeVersion: contextModeVersion(),
     };
   }
 

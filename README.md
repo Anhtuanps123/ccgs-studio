@@ -14,7 +14,7 @@ Studio chỉ chạy ở `http://127.0.0.1:4310`, máy khác trong mạng không 
 2. Ở màn **Hệ thống → Cài package**, bấm **Cài** cho từng mục còn báo "Chưa có":
    - Bắt buộc: Claude Code CLI. Sau đó bấm **Mở terminal**, gõ `/login` để đăng nhập.
    - Nên có: Git, VS Build Tools (chỉ cần khi `npm install` lỗi `better-sqlite3`).
-   - Tuỳ chọn: uv, rồi graphify (bản đồ code).
+   - Tuỳ chọn: uv, rồi graphify (bản đồ code); context-mode (tiết kiệm context; thường đã có sẵn sau `npm install`, bật ở **Cài đặt**).
 3. Trong Unity: cài **MCP for Unity** và bật ở **Window → MCP for Unity**. Phần này Studio không cài thay được.
 4. Vào **Cài đặt → Kiểm tra môi trường**. Mọi mục bắt buộc phải xanh.
 

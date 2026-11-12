@@ -16,6 +16,7 @@ export const DEFAULT_SETTINGS = (): StudioSettings => ({
   phoenix: { enabled: false, endpoint: 'http://127.0.0.1:6006/v1/traces' },
   autoAllow: [],
   graphify: DEFAULT_GRAPH_SETTINGS(),
+  contextMode: false,
 });
 
 const TOOL_RE = /^(\*|[A-Za-z0-9_.:-]{1,128})$/;
@@ -94,6 +95,7 @@ export function mergeSettings(cur: StudioSettings, b: any): StudioSettings {
     }
     out.graphify = next;
   }
+  if ('contextMode' in b) out.contextMode = b.contextMode === true;
   if (b.phoenix) {
     if ('enabled' in b.phoenix) out.phoenix.enabled = !!b.phoenix.enabled;
     if ('endpoint' in b.phoenix) {

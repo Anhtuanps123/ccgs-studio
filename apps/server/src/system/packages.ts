@@ -6,11 +6,13 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import type { DoctorCheck, SetupJob, SetupLevel, SetupPackage, SetupState } from '@ccgs/shared';
+import { contextModeVersion } from '../context-mode';
 
 export class SetupError extends Error { constructor(msg: string, readonly status: 400 | 409) { super(msg); } }
 
 export type Exec = (cmd: string, args: string[], o: { shell: boolean; timeoutMs: number }) => Promise<{ ok: boolean; out: string; error: string | null }>;
-export type Spawn = (cmd: string, args: string[]) => ChildProcess;
+/** cwd: folder to run in (the user's home when not given). */
+export type Spawn = (cmd: string, args: string[], cwd?: string) => ChildProcess;
 
 export interface SetupDeps {
   claudeCommand: () => string;
@@ -23,6 +25,8 @@ export interface SetupDeps {
   /** Called after a job ends with exit code 0. */
   onInstalled?: (id: string) => void;
   timeoutMs?: number;
+  /** Version of the context-mode plugin installed with the server, null when missing (tests swap it). */
+  contextMode?: () => string | null;
 }
 
 const MAX_LOG = 400;
@@ -31,7 +35,11 @@ const WINGET_FLAGS = ['-e', '--source', 'winget', '--accept-package-agreements',
 const PS = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command'];
 const VSWHERE = path.join(process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
 
-interface InstallCmd { cmd: string; args: string[]; confirm?: string }
+/** Root of the Studio repo (package.json with the workspaces): same depth from src/system and dist/system. */
+export const STUDIO_ROOT = path.resolve(__dirname, '..', '..', '..', '..');
+export const CONTEXT_MODE_PKG = 'context-mode@2.1.8';
+
+interface InstallCmd { cmd: string; args: string[]; confirm?: string; cwd?: string }
 interface Def {
   id: string; label: string; level: SetupLevel; why: string;
   /** Windows only. */
@@ -55,6 +63,10 @@ export const DEFS: Def[] = [
     install: { cmd: 'powershell.exe', args: [...PS, 'irm https://astral.sh/uv/install.ps1 | iex'] } },
   { id: 'graphify', label: 'graphify (bản đồ code)', level: 'optional', why: 'Claude tra class, method, file:dòng thay vì đọc cả file. Không cài vào project game.',
     install: { cmd: 'uv', args: ['tool', 'install', '--force', GRAPHIFY] }, needs: { id: 'uv', text: 'Cài uv trước' } },
+  { id: 'context-mode', label: 'context-mode (tiết kiệm context)', level: 'optional',
+    why: 'Plugin giữ kết quả công cụ lớn (file dài, log) ngoài context của task. Cài vào thư mục Studio, không cài vào Claude Code toàn máy hay project game.',
+    // npm is a .cmd on Windows: run it through cmd.exe, in the Studio folder (npm workspaces).
+    install: { cmd: 'cmd.exe', args: ['/d', '/c', 'npm', 'install', CONTEXT_MODE_PKG, '--save-exact', '--no-audit', '--no-fund', '-w', 'apps/server'], cwd: STUDIO_ROOT } },
 ];
 
 const quote = (a: string) => (/[\s|"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a);
@@ -75,7 +87,7 @@ const defaultExec: Exec = (cmd, args, o) => new Promise(resolve => {
   });
 });
 
-const defaultSpawn: Spawn = (cmd, args) => spawn(cmd, args, { cwd: os.homedir(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+const defaultSpawn: Spawn = (cmd, args, cwd) => spawn(cmd, args, { cwd: cwd ?? os.homedir(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
 
 /** Windows: adds PATH entries from the registry (user + machine) and ~/.local/bin that this process does not have yet. */
 export async function refreshWindowsPath(exec: Exec = defaultExec): Promise<void> {
@@ -156,6 +168,12 @@ export class SetupService {
       case 'git': return this.version('git', ['--version']);
       case 'uv': return this.version('uv', ['--version']);
       case 'graphify': return this.version('graphify', ['--version']);
+      case 'context-mode': {
+        const v = (this.d.contextMode ?? (() => contextModeVersion()))();
+        return v
+          ? { installed: true, version: v, detail: 'Đã có. Bật ở Cài đặt → Tiết kiệm context (context-mode); áp dụng cho task bắt đầu sau khi lưu.' }
+          : { installed: false, version: null, detail: 'Chưa cài. Nếu bấm Cài báo lỗi EPERM: tắt Studio, chạy "npm install" trong thư mục Studio rồi mở lại.' };
+      }
       case 'vsbuild': {
         if (!win) return { installed: null, version: null, detail: 'Chỉ kiểm tra trên Windows' };
         const r = await this.exec(VSWHERE, ['-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'catalog_productDisplayVersion'], { shell: false, timeoutMs: 15_000 });
@@ -176,11 +194,11 @@ export class SetupService {
     }
     // Checked after the await so two quick clicks cannot start two installers.
     if (this.job?.status === 'running') throw new SetupError(`Đang cài ${this.job.label}. Chờ xong rồi cài tiếp.`, 409);
-    const { cmd, args } = def.install;
+    const { cmd, args, cwd } = def.install;
     const job: SetupJob = { id: crypto.randomUUID(), packageId: id, label: def.label, command: commandText(def.install), status: 'running', startedAt: new Date().toISOString(), endedAt: null, exitCode: null, log: [`> ${commandText(def.install)}`] };
     this.job = job;
     let child: ChildProcess;
-    try { child = this.spawnFn(cmd, args); } catch (e) { this.finish(job, 'failed', null, (e as Error).message); return job; }
+    try { child = this.spawnFn(cmd, args, cwd); } catch (e) { this.finish(job, 'failed', null, (e as Error).message); return job; }
     this.child = child;
     const timer = setTimeout(() => { this.push(job, `Quá ${Math.round((this.d.timeoutMs ?? 45 * 60_000) / 60_000)} phút, dừng.`); this.kill(); }, this.d.timeoutMs ?? 45 * 60_000);
     timer.unref?.();

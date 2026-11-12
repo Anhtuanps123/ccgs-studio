@@ -2,7 +2,9 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { DEFS, SetupError, SetupService, commandText, outputLines, type Exec } from '../src/system/packages';
+import fs from 'node:fs';
+import path from 'node:path';
+import { CONTEXT_MODE_PKG, DEFS, STUDIO_ROOT, SetupError, SetupService, commandText, outputLines, type Exec } from '../src/system/packages';
 
 const VERSIONS: Record<string, string> = { claude: '2.1.321 (Claude Code)', git: 'git version 2.55.0.windows.1', uv: 'uv 0.13.5 (46776a95d)', graphify: 'graphify 0.9.103' };
 
@@ -23,17 +25,18 @@ function fakeChild() {
   return c;
 }
 
-function svc(o: { missing?: string[]; platform?: string } = {}) {
-  const spawned: { cmd: string; args: string[]; child: ReturnType<typeof fakeChild> }[] = [];
+function svc(o: { missing?: string[]; platform?: string; contextMode?: string | null } = {}) {
+  const spawned: { cmd: string; args: string[]; cwd?: string; child: ReturnType<typeof fakeChild> }[] = [];
   const installed: string[] = [];
   const s = new SetupService({
     claudeCommand: () => 'claude',
     unityCheck: async () => ({ id: 'unity-mcp', label: 'Unity MCP', ok: null, detail: 'Unity chưa mở.' }),
     platform: o.platform ?? 'win32',
     exec: fakeExec(o.missing),
-    spawn: (cmd, args) => { const child = fakeChild(); spawned.push({ cmd, args, child }); return child; },
+    spawn: (cmd, args, cwd) => { const child = fakeChild(); spawned.push({ cmd, args, cwd, child }); return child; },
     refreshPath: async () => {},
     onInstalled: id => installed.push(id),
+    contextMode: () => (o.contextMode === undefined ? '2.1.8' : o.contextMode),
   });
   return { s, spawned, installed };
 }
@@ -57,6 +60,26 @@ describe('setup packages', () => {
     expect(by.uv).toMatchObject({ installed: false, version: null });
     expect(by.graphify.install).toMatchObject({ blockedBy: 'Cài uv trước', command: 'uv tool install --force graphifyy[mcp]==0.9.103' });
     expect(by.uv.install?.blockedBy).toBeNull();
+  });
+
+  it('context-mode: reads the installed plugin, installs the pinned version with npm in the Studio folder', async () => {
+    const { s, spawned, installed } = svc({ contextMode: null });
+    let by = Object.fromEntries((await s.state()).packages.map(p => [p.id, p]));
+    expect(by['context-mode']).toMatchObject({ level: 'optional', installed: false, version: null });
+    expect(by['context-mode'].detail).toMatch(/EPERM/);
+    expect(by['context-mode'].install?.command).toBe(`cmd.exe /d /c npm install ${CONTEXT_MODE_PKG} --save-exact --no-audit --no-fund -w apps/server`);
+    // The pinned version is the one in the server's package.json.
+    const pkg = JSON.parse(fs.readFileSync(path.join(STUDIO_ROOT, 'apps', 'server', 'package.json'), 'utf8'));
+    expect(`context-mode@${pkg.dependencies['context-mode']}`).toBe(CONTEXT_MODE_PKG);
+    expect(fs.existsSync(path.join(STUDIO_ROOT, 'package-lock.json'))).toBe(true);
+    await s.install('context-mode');
+    expect(spawned[0]).toMatchObject({ cmd: 'cmd.exe', cwd: STUDIO_ROOT });
+    spawned[0].child.emit('close', 0);
+    await flush();
+    expect(installed).toEqual(['context-mode']);
+    by = Object.fromEntries((await svc().s.state()).packages.map(p => [p.id, p]));
+    expect(by['context-mode']).toMatchObject({ installed: true, version: '2.1.8' });
+    expect(by['context-mode'].detail).toMatch(/Cài đặt/);
   });
 
   it('not Windows: no install buttons', async () => {

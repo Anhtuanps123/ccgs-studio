@@ -66,6 +66,10 @@ export function Preferences({ onChanged }: { onChanged: () => void }) {
                 disabled={f.taskDefaults.compactAfter === false}
                 onChange={e => set(s => ({ ...s, taskDefaults: { ...s.taskDefaults, compactMinTokens: num(e.target.value) } }))} />
               <span className="hint">Ngữ cảnh cố định (system prompt, CLAUDE.md, tool, skill) đã khoảng 55–70k token, nên ngưỡng thấp hơn mức đó gần như lần nào cũng compact.</span></div>
+            <label className="opt"><input type="checkbox" checked={!!f.contextMode} disabled={!sys.data?.contextModeVersion && !f.contextMode}
+              onChange={e => set(s => ({ ...s, contextMode: e.target.checked }))} />
+              <div><b>Tiết kiệm context (context-mode)</b><div className="small muted">
+                {sys.data?.contextModeVersion ? `Bản ${sys.data.contextModeVersion}, cài kèm server.` : 'Chưa cài gói context-mode trong server.'} Nạp plugin context-mode vào task: kết quả công cụ lớn (đọc file dài, log, WebFetch) được cất vào chỉ mục trên máy, agent chỉ nhận phần cần qua ctx_search / ctx_execute. Hook của nó chặn Read nguyên file lớn, nên agent có thể không đọc trọn GDD. Áp dụng cho task bắt đầu sau khi lưu; không đụng project game hay cấu hình Claude Code toàn máy.</div></div></label>
           </div></div>
 
           <div className="panel"><div className="panel-h"><h3>Quyền công cụ</h3></div><div className="panel-b">
