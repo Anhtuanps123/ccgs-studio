@@ -9,7 +9,7 @@ roles:
   - id: uiux
     title: UI/UX
     hint: Màn hình, popup, HUD, luồng thao tác, bản prototype.
-    skills: [ux-design, ux-review, prototype]
+    skills: [studio:project-conventions, ux-design, ux-review, prototype]
   - id: art
     title: Art
     hint: Sprite, màu, font, spec asset theo art thật của game.
@@ -21,4 +21,4 @@ roles:
   - id: qa
     title: Tester
     hint: Kế hoạch test, smoke test, hồi quy, báo lỗi.
-    skills: [qa-plan, smoke-check, regression-suite, bug-report, bug-triage, playtest-report, test-evidence-review, soak-test, test-setup]
+    skills: [studio:ui-compare, qa-plan, smoke-check, regression-suite, bug-report, bug-triage, playtest-report, test-evidence-review, soak-test, test-setup]

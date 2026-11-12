@@ -105,6 +105,11 @@ CREATE INDEX IF NOT EXISTS events_task ON events(task_id, event_type);
 CREATE INDEX IF NOT EXISTS events_ts ON events(timestamp);
 CREATE INDEX IF NOT EXISTS sessions_last ON sessions(last_event_at);
 CREATE INDEX IF NOT EXISTS inv_type ON invocations(agent_type);
+-- Last known session totals of tasks deleted from the history, so resuming the session still splits cost and decides /compact right.
+CREATE TABLE IF NOT EXISTS task_session_last (session_id TEXT PRIMARY KEY, cost_usd REAL, cost_at TEXT, context_tokens INTEGER, context_at TEXT);
+-- Giải thích skill (api-contract §16): one row per SKILL.md text (sha256), explain is JSON written by Claude.
+CREATE TABLE IF NOT EXISTS skill_guides (hash TEXT PRIMARY KEY, name TEXT NOT NULL, explain TEXT, task_id TEXT, error TEXT, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS skill_guides_name ON skill_guides(name, created_at);
 `;
 
 /** Columns added after a table was first created (Phase 4+). */
@@ -118,6 +123,7 @@ const MIGRATIONS: [table: string, column: string, ddl: string][] = [
   ['tasks', 'context_tokens', 'INTEGER'], // context size of the task's last turn (decides /compact before a resume)
   ['tasks', 'mcp', 'TEXT'], // JSON TaskMcp: MCP servers attached to the task and their call counts
   ['tasks', 'attachments', 'TEXT'], // JSON Attachment[]: files the user attached
+  ['tasks', 'output', 'TEXT'], // TaskOutputFormat asked for (web | xlsx | csv)
 ];
 
 /** Opens (and creates) the Studio database. Use ':memory:' in tests. */

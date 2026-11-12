@@ -8,6 +8,7 @@ import path from 'node:path';
 import { SettingsService } from './settings/settings.service';
 import { CcgsAdapterService } from './ccgs/adapter.service';
 import { CcgsController } from './ccgs/ccgs.controller';
+import { SkillGuideService } from './ccgs/skill-guide';
 import { SystemController, forgetClaudeVersion, projectInfo } from './system/system.controller';
 import { SetupController } from './system/setup.controller';
 import { SetupService } from './system/packages';
@@ -22,6 +23,7 @@ import { TasksController } from './tasks/tasks.controller';
 import { AttachmentStore } from './tasks/attachments';
 import { AttachmentsController } from './tasks/attachments.controller';
 import { sdkRunner } from './tasks/runner';
+import { studioOutputDir } from './tasks/outputs';
 import { contextModeDir } from './context-mode';
 import { baseRef, takeSnapshot, taskDiffs } from './tasks/git-snapshot';
 import { summarizeInput } from './monitor/projector';
@@ -54,14 +56,15 @@ const PORT = Number(process.env.PORT ?? 4310);
       useFactory: (s: SettingsService, m: MonitorService, h: HookInstaller, att: AttachmentStore) => {
         const project = () => { const p = s.get().projectPath; return p && projectInfo(p).valid ? p : null; };
         return new TaskQueue({
-          db: m.db, project, snapshot: takeSnapshot, baseRef, diffs: taskDiffs, attachments: att,
+          db: m.db, project, snapshot: takeSnapshot, baseRef, diffs: taskDiffs, attachments: att, outputsDir: id => studioOutputDir(s.dir, id),
           defaults: () => s.get().taskDefaults, sessionExists: id => !!m.getSession(id),
           autoAllow: {
             has: tool => tool !== 'AskUserQuestion' && (s.get().autoAllow ?? []).some(x => x === '*' || x === tool),
             add: tool => { const cur = s.get().autoAllow ?? []; if (!cur.includes(tool)) s.update({ autoAllow: [...cur, tool] }); },
           },
           runner: sdkRunner({ cwd: () => project() ?? process.cwd(), settingsFile: h.studioSettingsFile(), summarize: (t, i) => summarizeInput(t, i, project()),
-            plugins: () => { const d = s.get().contextMode ? contextModeDir() : null; return d ? [d] : []; } }),
+            plugins: () => { const d = s.get().contextMode ? contextModeDir() : null; return d ? [d] : []; },
+            outputsDir: id => studioOutputDir(s.dir, id) }),
         });
       },
     },
@@ -101,6 +104,13 @@ const PORT = Number(process.env.PORT ?? 4310);
         onInstalled: id => { if (id === 'claude') forgetClaudeVersion(); },
       }),
     },
+    {
+      provide: SkillGuideService,
+      inject: [MonitorService, TaskQueue, CcgsAdapterService],
+      useFactory: (m: MonitorService, q: TaskQueue, a: CcgsAdapterService) => new SkillGuideService({
+        db: m.db, queue: q, skills: () => a.snapshot?.skills ?? null, workflows: () => a.snapshot?.workflows ?? [], root: () => a.projectRoot,
+      }),
+    },
     { provide: PhoenixExporter, inject: [MonitorService, SettingsService], useFactory: (m: MonitorService, s: SettingsService) => new PhoenixExporter(m, s) },
   ],
 })
@@ -131,8 +141,10 @@ class AppModule implements OnModuleInit {
     b.on('toolcall', x => this.live.emit('toolcall:upsert', x));
     b.on('event', x => this.live.emit('event:new', x));
     b.on('log', x => this.live.emit('log:new', x));
+    b.on('cleared', x => this.live.emit('monitor:cleared', x));
     const t = this.tasks.bus;
     t.on('task', x => this.live.emit('task:upsert', x));
+    t.on('removed', ids => this.live.emit('task:delete', { ids }));
     t.on('interaction', x => this.live.emit('interaction:new', x));
     t.on('resolved', x => this.live.emit('interaction:resolved', x));
     t.on('log', (lvl, msg, sid) => this.monitor.log(lvl, 'studio', msg, sid));

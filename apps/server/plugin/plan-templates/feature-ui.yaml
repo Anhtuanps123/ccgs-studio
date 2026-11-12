@@ -6,6 +6,9 @@ title: Tính năng có UI
 when: Tính năng mới có màn hình, popup, HUD hoặc nút mới.
 ui: true
 steps:
+  # Quy tắc 7: quy ước UI của dự án (màn mẫu, nút đóng, 9-slice). Có design/conventions.md rồi thì bỏ.
+  - skill: studio:project-conventions
+    output: design/conventions.md
   - skill: quick-design
     rigor: [minimal]
   - skill: design-system
@@ -17,7 +20,7 @@ steps:
   - skill: ux-design
     repeat: true
   - skill: ux-review
-    rigor: [full]
+    rigor: [standard, full]
     repeat: true
   - skill: prototype
     optional: true

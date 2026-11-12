@@ -6,6 +6,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import type { PipelineStep, PlanIssue, Rigor } from '@ccgs/shared';
 import { STUDIO_PLUGIN_DIR } from '../studio-plugin';
+import { applyStudioRules, CONVENTIONS_SKILL } from './studio-rules';
 
 export interface TemplateSlot { skill: string; rigor: Rigor[] | null; optional: boolean; repeat: boolean; output: string | null }
 export interface PlanTemplate { id: string; title: string; when: string; ui: boolean; free: boolean; steps: TemplateSlot[] }
@@ -120,15 +121,17 @@ export interface CheckInput {
   /** The user edited the plan: no auto-fix, and template errors become warnings (the user decides). */
   byUser: boolean;
   /** Builds a new step the same way the planner's steps are built. */
-  make: (s: { title: string; skill: string; args: string | null; why: string }) => PipelineStep;
+  make: (s: { title: string; skill: string | null; args: string | null; prompt?: string | null; why: string }) => PipelineStep;
   /** Roles from plan-roles.yaml and the ones the user chose (null/all = no filter). */
   roles?: PlanRoleDef[];
   chosen?: string[] | null;
+  /** Skills the project and the studio plugin have; undefined = assume all (auto-fixes never add an unknown skill). */
+  known?: Set<string>;
 }
 
 export function checkPlan(c: CheckInput): { steps: PipelineStep[]; issues: PlanIssue[]; template: PlanTemplate | null } {
   const issues: PlanIssue[] = [];
-  const add = (level: PlanIssue['level'], rule: string, message: string, stepId: string | null = null) =>
+  const add = (level: PlanIssue['level'], rule: string, message: string, stepId: string | null = null): void => void
     issues.push({ level: c.byUser && level === 'error' ? 'warn' : level, rule, message, stepId });
   const steps = [...c.steps];
   const live = () => steps.filter(s => s.status !== 'skipped' && s.status !== 'cancelled');
@@ -162,6 +165,15 @@ export function checkPlan(c: CheckInput): { steps: PipelineStep[]; issues: PlanI
   const slots = t ? forRigor(t, c.rigor) : [];
   if (t && !c.slug && slots.some(s => s.output?.includes('{slug}'))) add('warn', 'slug', 'Kế hoạch thiếu "slug" (mã tính năng) nên không kiểm được file đã có.');
 
+  // Auto-fix 0 (rule 7): project conventions first, when a UI template needs them and they are not on disk yet.
+  const convSlot = slots.find(s => s.skill === CONVENTIONS_SKILL);
+  if (t?.ui && convSlot && !c.byUser && !offRole(CONVENTIONS_SKILL) && (!c.known || c.known.has(CONVENTIONS_SKILL))
+    && !live().some(s => s.skill === CONVENTIONS_SKILL) && !exists(convSlot.output)) {
+    const at = steps.findIndex(s => s.status === 'pending');
+    const fix = c.make({ title: 'Ghi quy ước UI của dự án (Unity MCP)', skill: CONVENTIONS_SKILL, args: null, why: 'Studio tự chèn: quy tắc 7, UI mới dựng từ màn mẫu của dự án.' });
+    steps.splice(at >= 0 ? at : steps.length, 0, fix);
+    add('info', 'conventions', `Chưa có ${convSlot.output}: đã tự chèn bước ghi quy ước UI đầu kế hoạch.`, fix.id);
+  }
   // Auto-fix 1: art context before the first UI step (read-only skill, safe to add).
   const artSlot = slots.find(s => s.skill === ART_SKILL);
   if (t?.ui && artSlot && !c.byUser && !offRole(ART_SKILL) && !live().some(s => s.skill === ART_SKILL) && !exists(artSlot.output)) {
@@ -182,6 +194,12 @@ export function checkPlan(c: CheckInput): { steps: PipelineStep[]; issues: PlanI
       add('info', 'story-done', `Đã tự chèn /story-done cho ${s.args}.`, fix.id);
     }
   }
+
+  // Studio rules 1, 4, 5, 8 (studio-rules.ts): may add steps on the planner's plan, so before the template checks.
+  applyStudioRules({
+    steps, slug: c.slug, rigor: c.rigor, request: c.request, root: c.root, byUser: c.byUser, ui: !!t?.ui, type: t?.id ?? c.type, known: c.known,
+    make: c.make, add,
+  });
 
   const L = live();
   // Required steps of the template.

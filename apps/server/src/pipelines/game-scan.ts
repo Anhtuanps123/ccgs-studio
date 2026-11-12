@@ -4,8 +4,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import type { DoctorCheck, GameScan, Task } from '@ccgs/shared';
+import { SCAN_SKILLS, type DoctorCheck, type GameScan, type ScanSkill, type Task } from '@ccgs/shared';
 import type { TaskQueue } from '../tasks/task-queue';
+import { readSetup } from './pipeline.service';
 
 export const NO_MCP = 'UNITY_MCP_UNAVAILABLE';
 const ENDED = ['completed', 'failed', 'cancelled'];
@@ -57,6 +58,11 @@ export class GameScanService {
         const done = this.d.queue.list({ skill: 'start', status: 'completed', limit: 50 }).find(t => t.resumeOf === s.sessionId || t.id === s.startTaskId);
         if (done) { s.startTaskId = done.id; s.startDoneAt = done.endedAt ?? new Date().toISOString(); this.save(s); return this.get(); }
       }
+      // A step that completed while this service missed the event (server restart).
+      for (const [k, v] of Object.entries(s.steps ?? {})) {
+        const t = v && !v.doneAt ? this.d.queue.get(v.taskId) : null;
+        if (t?.status === 'completed') { s.steps = { ...s.steps, [k]: { taskId: t.id, doneAt: t.endedAt ?? new Date().toISOString() } }; this.save(s); return this.get(); }
+      }
       s.images = fs.existsSync(imgDir) ? fs.readdirSync(imgDir).filter(n => /\.(png|jpe?g)$/i.test(n)) : [];
       return s;
     } catch { return empty; }
@@ -79,7 +85,7 @@ export class GameScanService {
     fs.mkdirSync(img, { recursive: true });
     const t = this.d.queue.create({ kind: 'prompt', prompt: scanPrompt(img), permissionMode: 'default' });
     const prev = this.raw();
-    this.save({ status: 'running', taskId: t.id, sessionId: null, at: new Date().toISOString(), summary: null, images: [], error: null, startTaskId: prev?.startTaskId ?? null, startDoneAt: prev?.startDoneAt ?? null });
+    this.save({ status: 'running', taskId: t.id, sessionId: null, at: new Date().toISOString(), summary: null, images: [], error: null, startTaskId: prev?.startTaskId ?? null, startDoneAt: prev?.startDoneAt ?? null, steps: prev?.steps ?? {} });
     return this.get();
   }
   /**
@@ -95,11 +101,31 @@ export class GameScanService {
   }
 
   /** /start continuing the scan session, so it already knows the existing game. */
-  runStart(): Task {
+  runStart(): Task { return this.runSkill('start'); }
+
+  /**
+   * Bước 0 buttons: /start, /project-stage-detect, /adopt, each continuing the scan session (not chained after one
+   * another, so the context stays short). Order as in the /start SKILL.md: each needs the previous one done.
+   */
+  runSkill(name: string): Task {
+    if (!(SCAN_SKILLS as readonly string[]).includes(name)) throw new Error(`Skill không chạy được từ Bước 0: ${name}`);
     const s = this.get();
     if (s.status !== 'ok' || !s.sessionId) throw new Error('Cần quét game thành công trước');
-    const t = this.d.queue.create({ kind: 'skill', skill: 'start', args: '', resumeOf: s.sessionId });
-    this.save({ ...this.raw()!, startTaskId: t.id, startDoneAt: null });
+    const skill = name as ScanSkill;
+    const running = (id?: string | null) => { const t = id ? this.d.queue.get(id) : null; return !!t && !ENDED.includes(t.status); };
+    if (skill === 'start') {
+      if (running(s.startTaskId)) throw new Error('/start đang chạy');
+    } else {
+      if (running(s.steps?.[skill]?.taskId)) throw new Error(`/${skill} đang chạy`);
+      const need = skill === 'project-stage-detect'
+        ? (s.startDoneAt || readSetup(this.d.project()).started ? null : 'Chạy /start trước')
+        : (s.steps?.['project-stage-detect']?.doneAt ? null : 'Chạy /project-stage-detect trước');
+      if (need) throw new Error(need);
+    }
+    const t = this.d.queue.create({ kind: 'skill', skill, args: '', resumeOf: s.sessionId });
+    const raw = this.raw()!;
+    this.save(skill === 'start' ? { ...raw, startTaskId: t.id, startDoneAt: null }
+      : { ...raw, steps: { ...raw.steps, [skill]: { taskId: t.id, doneAt: null } } });
     return t;
   }
   private raw(): GameScan | null { const f = this.file(); try { return f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null; } catch { return null; } }
@@ -107,6 +133,11 @@ export class GameScanService {
     const s = this.raw();
     if (!s) return;
     if (s.startTaskId === t.id && ENDED.includes(t.status)) { if (t.status === 'completed') this.save({ ...s, startDoneAt: t.endedAt ?? new Date().toISOString() }); return; }
+    const step = Object.entries(s.steps ?? {}).find(([, v]) => v?.taskId === t.id)?.[0];
+    if (step) {
+      if (t.status === 'completed') this.save({ ...s, steps: { ...s.steps, [step]: { taskId: t.id, doneAt: t.endedAt ?? new Date().toISOString() } } });
+      return;
+    }
     if (s.taskId !== t.id || !ENDED.includes(t.status)) return;
     const text = t.resultText ?? '';
     const noMcp = text.includes(NO_MCP);

@@ -49,8 +49,8 @@ describe('plan roles', () => {
   });
   it('every role chosen: same result as before, steps get roles', () => {
     const r = run(['quick-design', 'ux-design', 'create-stories'], roles.map(x => x.id));
-    expect(r.steps.map(s => s.skill)).toEqual(['quick-design', ART_SKILL, 'ux-design', 'create-stories']);
-    expect(r.steps.map(s => s.role)).toEqual(['design', 'art', 'uiux', 'dev']);
+    expect(r.steps.map(s => s.skill)).toEqual(['studio:project-conventions', 'quick-design', ART_SKILL, 'ux-design', 'create-stories']);
+    expect(r.steps.map(s => s.role)).toEqual(['uiux', 'design', 'art', 'uiux', 'dev']);
     expect(rules(r, 'error')).toEqual([]);
   });
   it('only Developer: design/UI/art steps are not required nor auto-added', () => {

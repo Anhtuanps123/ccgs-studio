@@ -9,8 +9,8 @@ const enc = encodeURIComponent;
 
 export function Performance() {
   const ses = useSession();
-  const tasks = useLiveApi<TaskStats>('/api/stats/tasks', null, ['task:upsert']);
-  const agents = useLiveApi<AgentStats[]>('/api/stats/agents', null, ['invocation:upsert']);
+  const tasks = useLiveApi<TaskStats>('/api/stats/tasks', null, ['task:upsert', 'monitor:cleared']);
+  const agents = useLiveApi<AgentStats[]>('/api/stats/agents', null, ['invocation:upsert', 'monitor:cleared']);
   const usage = useLiveApi<SessionUsage>(ses.id ? `/api/sessions/${enc(ses.id)}/usage` : null, ses.id, ['invocation:upsert', 'session:upsert']);
   const inv = useLiveApi<AgentInvocation[]>(ses.id ? `/api/sessions/${enc(ses.id)}/invocations` : null, ses.id, ['invocation:upsert']);
   const settings = useApi<StudioSettings>('/api/settings');
@@ -28,9 +28,16 @@ export function Performance() {
     catch (e) { setExp({ ok: false, spans: 0, status: null, error: (e as Error).message }); } finally { setBusy(false); }
   };
 
+  const resetStats = async () => {
+    if (!confirm('Xoá số liệu Task và So sánh agent? Từ giờ chỉ tính task và agent chạy sau lúc này. Task, session và lịch sử trong Task Center vẫn giữ.')) return;
+    try { await api('/api/stats', { method: 'DELETE' }); tasks.reload(); agents.reload(); } catch (e) { alert((e as Error).message); }
+  };
+
   return (
     <>
-      <div className="view-head"><div><h1>Hiệu suất</h1><p>Số liệu tính từ task đã chạy, event hook và transcript. Không có dữ liệu thì hiện Unknown.</p></div></div>
+      <div className="view-head"><div><h1>Hiệu suất</h1><p>Số liệu tính từ task đã chạy, event hook và transcript. Không có dữ liệu thì hiện Unknown.
+        {t?.since ? ` Task và so sánh agent đang tính từ ${when(t.since)}.` : ''}</p></div>
+        <button className="btn" onClick={resetStats} title="Chỉ đặt mốc; task, session và Task Center giữ nguyên">Xoá số liệu</button></div>
 
       <div className="panel"><div className="panel-h"><h3>Task (M-PF-01)</h3><span className="muted small">Task đã kết thúc chạy từ Studio</span></div>
         {t ? <div className="big">

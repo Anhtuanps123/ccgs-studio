@@ -1,7 +1,7 @@
 // T-TC-01..05, T-SK-03: create, queue, stop, answer, results.
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import type { NewTask, PendingInteraction, PermissionMode, QuestionSpec, SessionUsage, Skill, StudioSettings, Task, TaskDiff } from '@ccgs/shared';
+import type { NewTask, PendingInteraction, PermissionMode, QuestionSpec, SessionUsage, Skill, StudioSettings, Task, TaskDiff, TaskOutput, TaskOutputFormat, TaskRemoveResult } from '@ccgs/shared';
 import { api, live, useApi } from '../api';
 import { Duration, Status, when } from '../monitor';
 import { DiffView, UsageTable, fmtUsd, parseGitDiff } from '../insights';
@@ -19,7 +19,7 @@ export function useTaskData() {
       if (timer.current) return;
       timer.current = setTimeout(() => { timer.current = null; r1(); r2(); }, 150);
     };
-    const evs = ['task:upsert', 'interaction:new', 'interaction:resolved', 'connect'];
+    const evs = ['task:upsert', 'task:delete', 'interaction:new', 'interaction:resolved', 'connect'];
     evs.forEach(e => s.on(e, h));
     return () => { evs.forEach(e => s.off(e, h)); if (timer.current) clearTimeout(timer.current); timer.current = null; };
   }, [r1, r2]);
@@ -144,18 +144,85 @@ function TaskDiffs({ t }: { t: Task }) {
   );
 }
 
+const OUT_KIND: Record<TaskOutput['kind'], string> = { web: 'Web', doc: 'Tài liệu', image: 'Ảnh', data: 'Dữ liệu', other: 'File' };
+const OUT_FMT: [TaskOutputFormat, string, string][] = [
+  ['web', 'Trang web (HTML)', 'Claude viết thêm 1 trang HTML tự chạy: prototype chơi được, hoặc trình bày thiết kế dễ đọc.'],
+  ['xlsx', 'Excel', 'Claude ghi kết quả thành các bảng; Studio dựng file .xlsx khi task xong.'],
+  ['csv', 'CSV', 'Claude ghi mỗi bảng thành 1 file .csv.'],
+];
+/** "Đầu ra" select of the create and resume forms. Files go to a Studio folder, not into the game project. */
+function OutputSelect({ id, value, onChange }: { id: string; value: TaskOutputFormat | ''; onChange: (v: TaskOutputFormat | '') => void }) {
+  return (
+    <div className="field" style={{ marginBottom: 0 }}><label htmlFor={id}>Đầu ra</label>
+      <select id={id} value={value} onChange={e => onChange(e.target.value as TaskOutputFormat | '')}>
+        <option value="">Không thêm (chỉ file task tự tạo)</option>
+        {OUT_FMT.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+      {value && <div className="small muted" style={{ marginTop: 4 }}>{OUT_FMT.find(f => f[0] === value)?.[2]} Tốn thêm token cho phần này. File nằm ở thư mục riêng của Studio, xem ở tab Đầu ra.</div>}
+    </div>
+  );
+}
+const fmtSize = (n: number | null) => (n === null ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+
+/** Đầu ra (api-contract §15): open HTML in Studio, export .md to Excel or CSV, view or save the rest. No Claude call. */
+function TaskOutputs({ t }: { t: Task }) {
+  const d = useApi<TaskOutput[]>(`/api/tasks/${t.id}/outputs`);
+  const [view, setView] = useState<string | null>(null);
+  if (!d.data) return <div className="small muted">{d.error ?? 'Đang tải…'}</div>;
+  if (!d.data.length) return <div className="small muted">{t.output && (t.status === 'running' || t.status === 'queued' || t.status === 'waiting') ? 'Task chưa xong, đầu ra sẽ hiện ở đây.'
+    : t.changedFiles === null ? 'Unknown (project không phải git repo, Studio không biết task đã tạo file nào).'
+    : t.output ? 'Claude chưa ghi file đầu ra nào. Xem Phản hồi cuối, hoặc tiếp tục session và nhắc lại.' : 'Task không tạo hay sửa file nào. Lần sau chọn "Đầu ra" khi tạo task để có trang web, Excel hoặc CSV.'}</div>;
+  const base = `/api/tasks/${t.id}/outputs`;
+  const raw = (p: string) => `${base}/raw/${p.split('/').map(encodeURIComponent).join('/')}`;
+  const exp = (p: string, f: 'xlsx' | 'csv') => `${base}/export?path=${encodeURIComponent(p)}&format=${f}`;
+  const order: TaskOutput['kind'][] = ['web', 'doc', 'image', 'data', 'other'];
+  const mine = (o: TaskOutput) => o.path.startsWith('~studio/');
+  const items = [...d.data].sort((a, b) => Number(mine(b)) - Number(mine(a)) || order.indexOf(a.kind) - order.indexOf(b.kind));
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <div className="small muted">File task đã tạo hoặc sửa. Xuất Excel/CSV do Studio tự chuyển từ file .md, không gọi Claude. Sửa trong Excel không cập nhật lại file .md.</div>
+      {items.map(o => {
+        const url = o.preview ?? raw(o.path);
+        return (
+          <div key={o.path} className="stack" style={{ gap: 4 }}>
+            <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+              <span className="tag">{OUT_KIND[o.kind]}</span>{mine(o) && <span className="tag" title="Đầu ra bạn chọn khi tạo task; nằm ở thư mục riêng của Studio, không trong project">Đầu ra đã chọn</span>}
+              <code className="small">{mine(o) ? o.path.slice('~studio/'.length) : o.path}</code>
+              <span className="small muted">{o.exists ? fmtSize(o.size) : 'không còn trên đĩa'}</span>
+              {o.exists && <>
+                {o.kind === 'web' && <button className="btn sm primary" onClick={() => setView(view === o.path ? null : o.path)} aria-expanded={view === o.path}>{view === o.path ? 'Đóng' : 'Xem trong Studio'}</button>}
+                {o.kind === 'web' && <a className="btn sm" href={url} target="_blank" rel="noopener">Mở tab mới</a>}
+                {o.kind === 'doc' && <a className="btn sm primary" href={exp(o.path, 'xlsx')} download>Xuất Excel</a>}
+                {o.kind === 'doc' && (o.tables ? <a className="btn sm" href={exp(o.path, 'csv')} download>Xuất CSV ({o.tables} bảng)</a>
+                  : <button className="btn sm" disabled title="File không có bảng nào; Xuất Excel lấy được cả phần chữ">Xuất CSV</button>)}
+                {o.kind === 'image' && <button className="btn sm" onClick={() => setView(view === o.path ? null : o.path)} aria-expanded={view === o.path}>{view === o.path ? 'Đóng' : 'Xem'}</button>}
+                {(o.kind === 'doc' || o.kind === 'data' || o.kind === 'other') && <a className="btn sm" href={raw(o.path)} target="_blank" rel="noopener">Xem</a>}
+                <a className={`btn sm${o.kind === 'other' && /\.xlsx$/i.test(o.path) ? ' primary' : ''}`} href={`${raw(o.path)}?download=1`} download>Tải về</a>
+              </>}
+            </div>
+            {view === o.path && o.kind === 'web' && <iframe title={o.path} src={url} sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock"
+              style={{ width: '100%', height: 560, border: '1px solid var(--line)', borderRadius: 6, background: '#fff' }} />}
+            {view === o.path && o.kind === 'image' && <img src={raw(o.path)} alt={o.path} style={{ maxWidth: '100%', maxHeight: 480, border: '1px solid var(--line)', borderRadius: 6, alignSelf: 'flex-start' }} />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** T-TC-07 */
 function ResumeForm({ t, onDone }: { t: Task; onDone: () => void }) {
   const [text, setText] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const att = useAttachments();
+  const [output, setOutput] = useState<TaskOutputFormat | ''>('');
   if (!t.sessionId) return null;
   const send = async () => {
     setBusy(true); setErr(null);
     try {
-      await api(`/api/tasks/${t.id}/resume`, { method: 'POST', body: JSON.stringify({ prompt: text, ...(att.ids.length ? { attachments: att.ids } : {}) }) });
-      setText(''); att.clear(); onDone();
+      await api(`/api/tasks/${t.id}/resume`, { method: 'POST', body: JSON.stringify({ prompt: text, ...(att.ids.length ? { attachments: att.ids } : {}), ...(output ? { output } : {}) }) });
+      setText(''); att.clear(); setOutput(''); onDone();
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   return (
@@ -163,6 +230,7 @@ function ResumeForm({ t, onDone }: { t: Task; onDone: () => void }) {
       <label className="muted small" htmlFor={`res-${t.id}`}>Tiếp tục session này với prompt mới (task mới vào hàng đợi, Claude nhớ hội thoại cũ)</label>
       <textarea id={`res-${t.id}`} value={text} onChange={e => setText(e.target.value)} placeholder="Ví dụ: Sửa thêm phần test bị lỗi" style={{ minHeight: 60 }} />
       <AttachBar att={att} />
+      <OutputSelect id={`res-out-${t.id}`} value={output} onChange={setOutput} />
       <div className="row"><button className="btn" disabled={busy || att.busy || !text.trim()} onClick={send}>Tiếp tục session</button>{err && <span className="badge-err">{err}</span>}</div>
     </div>
   );
@@ -177,14 +245,16 @@ function TaskUsage({ t }: { t: Task }) {
 
 /** Everything about a finished task: result, files, diff, tokens, resume. */
 function TaskDetail({ t, onDone }: { t: Task; onDone: () => void }) {
-  const [tab, setTab] = useState<'result' | 'diff' | 'tokens'>('result');
+  const [tab, setTab] = useState<'result' | 'outputs' | 'diff' | 'tokens'>(t.output ? 'outputs' : 'result');
+  const outs = t.changedFiles?.filter(f => f.change !== 'D').length ?? 0;
   return (
     <div className="stack">
       <div className="tabs" role="tablist" style={{ marginBottom: 0 }}>
-        {([['result', 'Kết quả'], ['diff', `Diff${t.changedFiles?.length ? ` (${t.changedFiles.length})` : ''}`], ['tokens', 'Token']] as const).map(([k, l]) =>
+        {([['result', 'Kết quả'], ['outputs', `Đầu ra${t.output ? ` · ${OUT_FMT.find(f => f[0] === t.output)?.[1]}` : ''}${outs ? ` (${outs})` : ''}`], ['diff', `Diff${t.changedFiles?.length ? ` (${t.changedFiles.length})` : ''}`], ['tokens', 'Token']] as const).map(([k, l]) =>
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{l}</button>)}
       </div>
       {tab === 'result' && <Result t={t} />}
+      {tab === 'outputs' && <TaskOutputs t={t} />}
       {tab === 'diff' && <TaskDiffs t={t} />}
       {tab === 'tokens' && <TaskUsage t={t} />}
       <ResumeForm t={t} onDone={onDone} />
@@ -218,6 +288,7 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
   const [text, setText] = useState('');
   const [model, setModel] = useState('');
   const [mode, setMode] = useState<PermissionMode | ''>('');
+  const [output, setOutput] = useState<TaskOutputFormat | ''>('');
   const settings = useApi<StudioSettings>('/api/settings');
   const def = settings.data?.taskDefaults;
   const [err, setErr] = useState<string | null>(null);
@@ -228,7 +299,7 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
 
   const submit = async () => {
     // Empty choices are left out so the server applies the task defaults (S-03).
-    const extra = { ...(model ? { model } : {}), ...(mode ? { permissionMode: mode } : {}), ...(att.ids.length ? { attachments: att.ids } : {}) };
+    const extra = { ...(model ? { model } : {}), ...(mode ? { permissionMode: mode } : {}), ...(att.ids.length ? { attachments: att.ids } : {}), ...(output ? { output } : {}) };
     const body: NewTask = skill ? { kind: 'skill', skill, args: text, ...extra } : { kind: 'prompt', prompt: text, ...extra };
     setBusy(true); setErr(null);
     try {
@@ -245,7 +316,7 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
         <select id="t-skill" value={skill} onChange={e => setSkill(e.target.value)}>
           <option value="">Không dùng skill, chỉ prompt</option>
           {skill && !skills.data?.some(s => s.name === skill) && <option value={skill}>/{skill}</option>}
-          {(skills.data ?? []).filter(s => s.hasSkillMd && s.userInvocable !== false).map(s => <option key={s.dir} value={s.name}>/{s.name}</option>)}
+          {(skills.data ?? []).filter(s => s.origin === 'ccgs' && s.hasSkillMd && s.userInvocable !== false).map(s => <option key={s.dir} value={s.name}>/{s.name}</option>)}
         </select></div>
       <div className="field" {...att.zone}><label htmlFor="t-prompt">{skill ? 'Tham số' : 'Prompt'}</label>
         <textarea id="t-prompt" value={text} onChange={e => setText(e.target.value)} placeholder={skill ? hint ?? 'Không bắt buộc' : 'Ví dụ: Viết test cho hệ thống inventory'} />
@@ -259,6 +330,7 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
             <option value="">Theo cài đặt ({MODES.find(m => m[0] === (def?.permissionMode ?? 'default'))?.[1]})</option>
             {MODES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
       </div>
+      <OutputSelect id="t-out" value={output} onChange={setOutput} />
       {def?.maxRuntimeMin && <p className="small muted" style={{ marginTop: 0 }}>Task chạy quá {def.maxRuntimeMin} phút sẽ bị dừng (đổi ở Cài đặt).</p>}
       <div className="row"><button className="btn primary" onClick={submit} disabled={busy || att.busy || (!skill && !text.trim())}>Thêm vào hàng đợi</button>{err && <span className="badge-err">{err}</span>}</div>
     </div></div>
@@ -289,6 +361,27 @@ export function Tasks() {
   const act = async (p: Promise<unknown>) => { setErr(null); try { await p; refresh(); } catch (e) { setErr((e as Error).message); } };
   const post = (path: string, body?: unknown, method = 'POST') => api(path, { method, body: body ? JSON.stringify(body) : undefined });
   const last = finished[0] && !cur ? finished[0] : null;
+  // Xoá lịch sử (api-contract §13): the current filter, optionally only tasks older than N days.
+  const [olderThan, setOlderThan] = useState(0);
+  const [msg, setMsg] = useState<string | null>(null);
+  const HIST_LABEL: Record<typeof hist, string> = { all: 'đã kết thúc', completed: 'completed', failed: 'failed', cancelled: 'cancelled' };
+  const report = (r: TaskRemoveResult) => setMsg(`Đã xoá ${r.deleted.length} task.${r.kept.length ? ` Giữ ${r.kept.length} task vì ${r.kept[0].reason}${r.kept.length > 1 ? ' (và các chuỗi khác)' : ''}.` : ''}`);
+  const clearHistory = async () => {
+    const scope = [`mọi task ${HIST_LABEL[hist]}`, debq && `khớp "${debq}"`, hSkill && `của /${hSkill}`, olderThan && `kết thúc trước ${olderThan} ngày nay`].filter(Boolean).join(', ');
+    if (!window.confirm(`Xoá ${scope} khỏi lịch sử?\nKhông khôi phục được. Task của chuỗi kế hoạch chưa xong được giữ lại. Dữ liệu Monitor, tệp đính kèm và file trong project không bị xoá.`)) return;
+    setErr(null); setMsg(null);
+    try {
+      const before = olderThan ? new Date(Date.now() - olderThan * 86_400_000).toISOString() : undefined;
+      report(await api<TaskRemoveResult>('/api/tasks/clear', { method: 'POST', body: JSON.stringify({ status: hist === 'all' ? undefined : hist, q: debq || undefined, skill: hSkill || undefined, before }) }));
+      setOpen(null); refresh(); reloadHistory();
+    } catch (e) { setErr((e as Error).message); }
+  };
+  const removeOne = async (t: Task) => {
+    if (!window.confirm(`Xoá task ${t.id.slice(0, 8)} khỏi lịch sử?\nKhông khôi phục được. Dữ liệu Monitor và file trong project không bị xoá.`)) return;
+    setErr(null); setMsg(null);
+    try { report(await api<TaskRemoveResult>(`/api/tasks/${t.id}`, { method: 'DELETE' })); setOpen(null); refresh(); reloadHistory(); }
+    catch (e) { setErr((e as Error).message); }
+  };
 
   return (
     <>
@@ -322,6 +415,14 @@ export function Tasks() {
               <select value={hSkill} onChange={e => setHSkill(e.target.value)} aria-label="Lọc theo skill" style={{ maxWidth: 200 }}>
                 <option value="">Mọi skill</option>{skillsUsed.map(k => <option key={k} value={k}>/{k}</option>)}</select>
             </div>
+            <div className="panel-b row" style={{ borderBottom: '1px solid var(--line)', gap: 8 }}>
+              <select value={olderThan} onChange={e => setOlderThan(Number(e.target.value))} aria-label="Xoá task cũ hơn" style={{ width: 'auto' }}>
+                <option value={0}>Mọi thời điểm</option><option value={1}>Cũ hơn 1 ngày</option><option value={7}>Cũ hơn 7 ngày</option><option value={30}>Cũ hơn 30 ngày</option></select>
+              <button className="btn sm danger" disabled={!done.length} onClick={clearHistory}
+                title="Xoá các task đã kết thúc theo bộ lọc đang chọn (trạng thái, tìm kiếm, skill, thời điểm)">Xoá lịch sử</button>
+              <span className="small muted" style={{ flex: 1, minWidth: 160 }}>Theo bộ lọc đang chọn. Giữ task của chuỗi kế hoạch chưa xong.</span>
+              {msg && <span className="small">{msg}</span>}
+            </div>
             <div className="tablewrap"><table><thead><tr><th>Task</th><th>Trạng thái</th><th>Bắt đầu</th><th>Thời lượng</th></tr></thead><tbody>
               {done.map(t => (
                 <Fragment key={t.id}>
@@ -329,7 +430,9 @@ export function Tasks() {
                     <td><span className="muted small">{t.id.slice(0, 8)}</span> {title(t)}</td><td><Status s={t.status} /></td><td>{when(t.startedAt)}</td>
                     <td><Duration ms={t.startedAt && t.endedAt ? Date.parse(t.endedAt) - Date.parse(t.startedAt) : null} start={t.startedAt} status={t.status} /></td>
                   </tr>
-                  {open === t.id && <tr><td colSpan={4}><TaskDetail t={t} onDone={refresh} />{t.sessionId && <div className="small" style={{ marginTop: 8 }}><Link to={`/live?s=${t.sessionId}`}>Mở session</Link> · <Link to={`/timeline?s=${t.sessionId}`}>Timeline</Link></div>}</td></tr>}
+                  {open === t.id && <tr><td colSpan={4}><TaskDetail t={t} onDone={refresh} /><div className="row small" style={{ marginTop: 8 }}>
+                    {t.sessionId && <><Link to={`/live?s=${t.sessionId}`}>Mở session</Link><Link to={`/timeline?s=${t.sessionId}`}>Timeline</Link></>}
+                    <span className="grow" /><button className="btn sm danger" onClick={() => removeOne(t)}>Xoá task này</button></div></td></tr>}
                 </Fragment>
               ))}
               {!done.length && <tr><td colSpan={4} className="muted">{history.error ?? 'Không có task nào khớp.'}</td></tr>}

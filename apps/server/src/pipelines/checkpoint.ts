@@ -16,7 +16,7 @@ const OFF_PLAN = new Set(['MAJOR REVISION NEEDED', 'BLOCKED', 'REDIRECTED', 'PIV
 const REVIEWS = new Set(['ux-review', 'design-review', 'code-review', 'story-readiness', 'architecture-review']);
 const REVISE = new Set(['NEEDS REVISION', 'CHANGES REQUIRED', 'NEEDS WORK']);
 /** Skills that should leave at least one changed file behind. */
-export const WRITERS = new Set(['quick-design', 'design-system', 'ux-design', 'prototype', 'create-epics', 'create-stories', 'dev-story', 'studio:unity-art-context', 'architecture-decision', 'art-bible']);
+export const WRITERS = new Set(['quick-design', 'design-system', 'ux-design', 'prototype', 'create-epics', 'create-stories', 'dev-story', 'studio:unity-art-context', 'studio:project-conventions', 'studio:ui-compare', 'architecture-decision', 'art-bible']);
 
 const clean = (l: string) => l.replace(/[*_`#>]/g, ' ').replace(/\s+/g, ' ').trim();
 

@@ -261,6 +261,38 @@ describe('game scan (Unity MCP)', () => {
     f.runs.get(st.id)!.finish({}); await tick();
     expect(p2.setup()).toMatchObject({ started: true, source: 'session', rigor: 'standard' });
   });
+
+  it('Bước 0 skills: fixed list, in order after /start, each continues the scan session', async () => {
+    const { GameScanService } = await import('../src/pipelines/game-scan');
+    const f = fakeRunner();
+    const db = openDb(':memory:');
+    const q = new TaskQueue({ db, runner: f.runner, project: () => 'x', snapshot: async () => new Map(), sessionExists: () => true });
+    const root = tmpProject('modes: {}');
+    const gs = new GameScanService({ home: tmpProject(null), queue: q, project: () => root });
+    const s = gs.start(); await tick();
+    f.runs.get(s.taskId!)!.finish({ resultText: 'UI ok', sessionId: 'scan-3' }); await tick();
+    expect(() => gs.runSkill('rm -rf')).toThrow(/không chạy được/);
+    expect(() => gs.runSkill('dev-story')).toThrow(/không chạy được/);
+    expect(() => gs.runSkill('project-stage-detect')).toThrow(/\/start trước/);
+    expect(() => gs.runSkill('adopt')).toThrow(/project-stage-detect trước/);
+    const st = gs.runSkill('start'); await tick();
+    expect(() => gs.runSkill('start')).toThrow(/đang chạy/);
+    f.runs.get(st.id)!.finish({}); await tick();
+    const sd = gs.runSkill('project-stage-detect');
+    expect(sd).toMatchObject({ prompt: '/project-stage-detect', resumeOf: 'scan-3' });
+    expect(gs.get().steps!['project-stage-detect']).toEqual({ taskId: sd.id, doneAt: null });
+    expect(() => gs.runSkill('project-stage-detect')).toThrow(/đang chạy/);
+    expect(() => gs.runSkill('adopt')).toThrow(/project-stage-detect trước/);
+    await tick(); f.runs.get(sd.id)!.finish({}); await tick();
+    expect(gs.get().steps!['project-stage-detect']!.doneAt).toBeTruthy();
+    const ad = gs.runSkill('adopt');
+    expect(ad).toMatchObject({ prompt: '/adopt', resumeOf: 'scan-3' });
+    await tick(); f.runs.get(ad.id)!.finish({}); await tick();
+    expect(gs.get().steps!.adopt!.doneAt).toBeTruthy();
+    // A new scan keeps what already ran.
+    gs.start();
+    expect(gs.get().steps!.adopt!.doneAt).toBeTruthy();
+  });
 });
 
 describe('pipeline plan standard', () => {
@@ -577,5 +609,49 @@ describe('pipeline roles', () => {
     const all = p.create({ request: 'y' });
     expect(all.roles).toBeNull();
     expect(q.get(all.planTaskId!)!.prompt).toContain('The user chose every role');
+  });
+});
+
+describe('studio rules in the run (rule 3 gate, rule 9 prompt)', () => {
+  it('pauses before /dev-story when the story has open questions; Tiếp tục accepts them and runs the step', async () => {
+    const root = tmpProject('project:\n  stage: Production\nmodes:\n  rigor: standard\n');
+    const story = 'production/epics/lucky-spin/story-001-wheel.md';
+    fs.mkdirSync(path.join(root, 'production/epics/lucky-spin'), { recursive: true });
+    fs.writeFileSync(path.join(root, story), '# Wheel\n## Open Questions\n- Quay mấy giây?\n');
+    fs.mkdirSync(path.join(root, 'production/session-state'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'production/session-state/active.md'), '- Open: phần thưởng chưa cân bằng\n');
+    const { p, f, q } = setup({ [`/dev-story ${story}`]: [{ path: 'Assets/Scripts/Wheel.cs', change: 'A' }] }, root);
+    let pl = p.create({ request: 'Làm story wheel' });
+    await tick();
+    expect(q.get(pl.planTaskId!)!.prompt).toContain('phần thưởng chưa cân bằng');
+    expect(q.get(pl.planTaskId!)!.prompt).toContain('Studio rules');
+    f.runs.get(pl.planTaskId!)!.finish({ resultText: '```json\n' + JSON.stringify({ steps: [{ title: 'Code', skill: 'dev-story', args: story }] }) + '\n```' });
+    await tick();
+    pl = p.start(p.get(pl.id)!.id);
+    expect(pl.status).toBe('paused');
+    expect(pl.steps[0]).toMatchObject({ status: 'pending', taskId: null, gate: { kind: 'open-questions', items: ['story-001-wheel.md: Quay mấy giây?'], acknowledged: false } });
+    expect(pl.checkpoint).toMatchObject({ decision: 'pause', stepId: pl.steps[0].id });
+    expect(pl.rules?.map(r => r.rule)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    pl = p.start(pl.id);
+    expect(pl.status).toBe('running');
+    expect(pl.steps[0].gate?.acknowledged).toBe(true);
+    expect(pl.steps[0].taskId).toBeTruthy();
+    expect(p.projectState()).toMatchObject({ rigor: 'standard', openItems: [{ kind: 'open', text: 'phần thưởng chưa cân bằng' }] });
+  });
+});
+
+describe('task history and plans (api-contract §13)', () => {
+  it('a plan that has not ended keeps its tasks in the history; once cancelled they can be deleted', async () => {
+    const { p, f, q } = setup();
+    let pl = p.create({ request: 'Tạo Lucky Spin' });
+    await tick();
+    f.runs.get(pl.planTaskId!)!.finish({ resultText: PLAN, sessionId: 'sess-1' });
+    await tick();
+    pl = p.get(pl.id)!;
+    expect(pl.status).toBe('review');
+    expect(() => q.remove(pl.planTaskId!)).toThrow(/chuỗi kế hoạch "Tạo Lucky Spin" chưa kết thúc \(review\)/);
+    expect(q.clear().kept.map(k => k.id)).toEqual([pl.planTaskId]);
+    await p.cancel(pl.id);
+    expect(q.clear().deleted).toEqual([pl.planTaskId]);
   });
 });

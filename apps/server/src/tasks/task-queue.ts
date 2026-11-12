@@ -1,12 +1,17 @@
 // T-TC-01..05: task store and single-runner queue. Independent of Nest so tests can drive it directly.
+import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import type { Attachment, ChangedFile, NewTask, PendingInteraction, PermissionDecision, QuestionAnswer, Task, TaskDefaults, TaskDiff, TaskMcp } from '@ccgs/shared';
+import type { Attachment, ChangedFile, NewTask, PendingInteraction, PermissionDecision, QuestionAnswer, Task, TaskDefaults, TaskDiff, TaskMcp, TaskOutputFormat, TaskRemoveResult } from '@ccgs/shared';
+import { OUTPUT_FORMATS } from '@ccgs/shared';
 import type { Db } from '../store/db';
 import type { InteractionReply, RunHandle, RunOutcome, Runner, SessionExtras } from './runner';
 import { diffSnapshots, type Snapshot } from './git-snapshot';
 
-export type QueueEvents = { task: [Task]; interaction: [PendingInteraction]; resolved: [{ id: string }]; log: ['info' | 'warn' | 'error', string, string | null] };
+export type QueueEvents = { task: [Task]; removed: [string[]]; interaction: [PendingInteraction]; resolved: [{ id: string }]; log: ['info' | 'warn' | 'error', string, string | null] };
+
+/** Statuses of a task that has ended (only these can be deleted from the history). */
+export const ENDED_STATUSES = ['completed', 'failed', 'cancelled'] as const;
 
 export interface QueueDeps {
   db: Db;
@@ -25,6 +30,8 @@ export interface QueueDeps {
   autoAllow?: { has(tool: string): boolean; add(tool: string): void };
   /** Turns the attachment ids of a new task into files (AttachmentStore); throws on a missing one. */
   attachments?: { resolve(ids: unknown): Attachment[] };
+  /** Folder of the output asked for when creating a task (outside the game project); removed with the task. */
+  outputsDir?: (taskId: string) => string;
 }
 
 const SKILL_RE = /^[a-z0-9][a-z0-9._-]*(:[a-z0-9][a-z0-9._-]*)?$/i; // plugin skills: plugin:skill
@@ -42,6 +49,7 @@ function fromRow(r: any): Task {
     contextTokens: r.context_tokens ?? null, baseRef: r.base_ref ?? null,
     mcp: r.mcp ? JSON.parse(r.mcp) as TaskMcp : null,
     attachments: r.attachments ? JSON.parse(r.attachments) as Attachment[] : null,
+    output: r.output ?? null,
   };
 }
 
@@ -79,6 +87,15 @@ export class TaskQueue {
 
   setSessionExtras(fn: (task: Task) => Promise<SessionExtras | null>) { this.extrasFor = fn; }
 
+  /** The open game project (where tasks run); null when none is set. */
+  project(): string | null { return this.d.project(); }
+  /** Output folder of a task (Task.output), or null when Studio has none configured. */
+  outputDir(id: string): string | null { return this.d.outputsDir?.(id) ?? null; }
+
+  /** Ended tasks that must stay in the history (id -> reason), e.g. tasks of an unfinished plan; set by PipelineService. */
+  private keepFor: (() => Map<string, string>) | null = null;
+  setKeep(fn: () => Map<string, string>) { this.keepFor = fn; }
+
   private get sql() { return this.d.db.$client; }
 
   get(id: string): Task | null {
@@ -86,12 +103,18 @@ export class TaskQueue {
     return r ? fromRow(r) : null;
   }
 
-  list(f: { status?: string; q?: string; skill?: string; from?: string; limit?: number } = {}): Task[] {
+  /** WHERE clause shared by list() and clear(). */
+  private filterSql(f: { status?: string; q?: string; skill?: string; from?: string }) {
     const where: string[] = [], args: unknown[] = [];
     if (f.status) { where.push(`status IN (${f.status.split(',').map(() => '?').join(',')})`); args.push(...f.status.split(',')); }
     if (f.q) { const q = f.q.toLowerCase(); where.push("(instr(lower(prompt), ?) > 0 OR instr(lower(COALESCE(result_text, '')), ?) > 0 OR id LIKE ?)"); args.push(q, q, f.q + '%'); }
     if (f.skill) { where.push('skill = ?'); args.push(f.skill.replace(/^\//, '')); }
     if (f.from) { where.push('created_at >= ?'); args.push(f.from); }
+    return { where, args };
+  }
+
+  list(f: { status?: string; q?: string; skill?: string; from?: string; limit?: number } = {}): Task[] {
+    const { where, args } = this.filterSql(f);
     const rows = this.sql.prepare(`SELECT * FROM tasks ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
       ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'waiting' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END, position, created_at DESC LIMIT ?`)
       .all(...args, Math.min(f.limit ?? 200, 500));
@@ -104,6 +127,59 @@ export class TaskQueue {
   /** T-PJ-03: anything running or waiting in the queue. */
   busy(): boolean { return !!this.current || this.queuedCount() > 0; }
 
+  /** "Xoá" on one history row. Only an ended task that no unfinished plan still needs. */
+  remove(id: string): TaskRemoveResult {
+    const t = this.get(id);
+    if (!t) throw new BadTask('Không có task này');
+    if (!(ENDED_STATUSES as readonly string[]).includes(t.status)) throw new BadTask('Task chưa kết thúc: dừng hoặc huỷ trước rồi mới xoá');
+    const why = this.keepFor?.().get(id);
+    if (why) throw new BadTask(`Không xoá được: ${why}`);
+    return this.deleteRows([id], []);
+  }
+
+  /**
+   * "Xoá lịch sử": every ended task matching the history filter (same meaning as list()), except the ones an
+   * unfinished plan still needs. `before` (ISO) keeps tasks that ended at or after it.
+   */
+  clear(f: { status?: string; q?: string; skill?: string; before?: string } = {}): TaskRemoveResult {
+    const wanted = (f.status ?? '').split(',').map(s => s.trim()).filter(Boolean);
+    const bad = wanted.find(s => !(ENDED_STATUSES as readonly string[]).includes(s));
+    if (bad) throw new BadTask(`Chỉ xoá được task đã kết thúc (completed, failed, cancelled), không phải "${bad}"`);
+    if (f.before !== undefined && Number.isNaN(Date.parse(f.before))) throw new BadTask('before phải là thời điểm ISO');
+    const { where, args } = this.filterSql({ status: (wanted.length ? wanted : [...ENDED_STATUSES]).join(','), q: f.q, skill: f.skill });
+    if (f.before) { where.push('ended_at < ?'); args.push(new Date(f.before).toISOString()); }
+    const ids = (this.sql.prepare(`SELECT id FROM tasks WHERE ${where.join(' AND ')}`).all(...args) as any[]).map(r => r.id as string);
+    const keep = this.keepFor?.() ?? new Map<string, string>();
+    const kept = ids.filter(id => keep.has(id)).map(id => ({ id, reason: keep.get(id)! }));
+    return this.deleteRows(ids.filter(id => !keep.has(id)), kept);
+  }
+
+  /** Deletes task rows in one transaction; first keeps each session's latest cost total and context size (see sessionTotal). */
+  private deleteRows(ids: string[], kept: TaskRemoveResult['kept']): TaskRemoveResult {
+    if (!ids.length) return { deleted: [], kept };
+    const last = this.sql.prepare(`INSERT INTO task_session_last (session_id, cost_usd, cost_at, context_tokens, context_at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        cost_usd = CASE WHEN excluded.cost_at IS NOT NULL AND (cost_at IS NULL OR excluded.cost_at > cost_at) THEN excluded.cost_usd ELSE cost_usd END,
+        cost_at = CASE WHEN excluded.cost_at IS NOT NULL AND (cost_at IS NULL OR excluded.cost_at > cost_at) THEN excluded.cost_at ELSE cost_at END,
+        context_tokens = CASE WHEN excluded.context_at IS NOT NULL AND (context_at IS NULL OR excluded.context_at > context_at) THEN excluded.context_tokens ELSE context_tokens END,
+        context_at = CASE WHEN excluded.context_at IS NOT NULL AND (context_at IS NULL OR excluded.context_at > context_at) THEN excluded.context_at ELSE context_at END`);
+    const one = this.sql.prepare('SELECT session_id, session_cost_usd, context_tokens, ended_at FROM tasks WHERE id = ?');
+    const del = this.sql.prepare('DELETE FROM tasks WHERE id = ?');
+    this.sql.transaction((xs: string[]) => {
+      for (const id of xs) {
+        const r = one.get(id) as any;
+        if (r?.session_id && r.ended_at && (r.session_cost_usd != null || r.context_tokens != null))
+          last.run(r.session_id, r.session_cost_usd, r.session_cost_usd != null ? r.ended_at : null, r.context_tokens, r.context_tokens != null ? r.ended_at : null);
+        del.run(id);
+      }
+    })(ids);
+    this.bus.emit('removed', ids);
+    this.bus.emit('log', 'info', `Đã xoá ${ids.length} task khỏi lịch sử${kept.length ? `, giữ ${kept.length} task của chuỗi kế hoạch chưa xong` : ''}.`, null);
+    // The task's output folder (Task.output) goes with it.
+    if (this.d.outputsDir) for (const id of ids) { try { fs.rmSync(this.d.outputsDir(id), { recursive: true, force: true }); } catch { /* left behind */ } }
+    return { deleted: ids, kept };
+  }
+
   /** T-TC-06 */
   diffs(id: string): TaskDiff[] | null {
     const r = this.sql.prepare('SELECT diffs FROM tasks WHERE id = ?').get(id) as any;
@@ -112,9 +188,9 @@ export class TaskQueue {
 
   private save(t: Task) {
     this.sql.prepare(`INSERT INTO tasks (id, kind, skill, args, prompt, model, permission_mode, status, position, session_id, resume_of,
-        created_at, started_at, ended_at, result_text, changed_files, error, cost_usd, compact_cost_usd, session_cost_usd, context_tokens, base_ref, mcp, attachments)
+        created_at, started_at, ended_at, result_text, changed_files, error, cost_usd, compact_cost_usd, session_cost_usd, context_tokens, base_ref, mcp, attachments, output)
       VALUES (@id, @kind, @skill, @args, @prompt, @model, @permissionMode, @status, @position, @sessionId, @resumeOf,
-        @createdAt, @startedAt, @endedAt, @resultText, @changedFiles, @error, @costUsd, @compactCostUsd, @sessionCostUsd, @contextTokens, @baseRef, @mcp, @attachments)
+        @createdAt, @startedAt, @endedAt, @resultText, @changedFiles, @error, @costUsd, @compactCostUsd, @sessionCostUsd, @contextTokens, @baseRef, @mcp, @attachments, @output)
       ON CONFLICT(id) DO UPDATE SET status = excluded.status, position = excluded.position, session_id = excluded.session_id,
         started_at = excluded.started_at, ended_at = excluded.ended_at, result_text = excluded.result_text,
         changed_files = excluded.changed_files, error = excluded.error, cost_usd = excluded.cost_usd,
@@ -122,7 +198,7 @@ export class TaskQueue {
         context_tokens = excluded.context_tokens, base_ref = excluded.base_ref, mcp = excluded.mcp`)
       .run({ ...t, costUsd: t.costUsd ?? null, compactCostUsd: t.compactCostUsd ?? null, sessionCostUsd: t.sessionCostUsd ?? null,
         contextTokens: t.contextTokens ?? null, baseRef: t.baseRef ?? null, mcp: t.mcp ? JSON.stringify(t.mcp) : null,
-        attachments: t.attachments?.length ? JSON.stringify(t.attachments) : null, changedFiles: t.changedFiles ? JSON.stringify(t.changedFiles) : null });
+        attachments: t.attachments?.length ? JSON.stringify(t.attachments) : null, output: t.output ?? null, changedFiles: t.changedFiles ? JSON.stringify(t.changedFiles) : null });
     this.bus.emit('task', t);
     return t;
   }
@@ -147,8 +223,10 @@ export class TaskQueue {
 
   /** SDK running total of a session after its latest finished task that reported one. */
   private sessionTotal(sessionId: string): number | null {
-    const r = this.sql.prepare(`SELECT session_cost_usd c FROM tasks WHERE session_id = ? AND session_cost_usd IS NOT NULL
-      AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 1`).get(sessionId) as any;
+    const r = this.sql.prepare(`SELECT c FROM (
+        SELECT session_cost_usd c, ended_at e FROM tasks WHERE session_id = ? AND session_cost_usd IS NOT NULL AND ended_at IS NOT NULL
+        UNION ALL SELECT cost_usd, cost_at FROM task_session_last WHERE session_id = ? AND cost_usd IS NOT NULL
+      ) ORDER BY e DESC LIMIT 1`).get(sessionId, sessionId) as any;
     return r?.c ?? null;
   }
 
@@ -159,8 +237,10 @@ export class TaskQueue {
   private compactFirst(task: Task): boolean {
     const def = this.d.defaults?.();
     if (!task.resumeOf || !def?.compactAfter) return false;
-    const r = this.sql.prepare(`SELECT context_tokens n FROM tasks WHERE session_id = ? AND context_tokens IS NOT NULL
-      AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 1`).get(task.resumeOf) as any;
+    const r = this.sql.prepare(`SELECT n FROM (
+        SELECT context_tokens n, ended_at e FROM tasks WHERE session_id = ? AND context_tokens IS NOT NULL AND ended_at IS NOT NULL
+        UNION ALL SELECT context_tokens, context_at FROM task_session_last WHERE session_id = ? AND context_tokens IS NOT NULL
+      ) ORDER BY e DESC LIMIT 1`).get(task.resumeOf, task.resumeOf) as any;
     return r?.n == null || r.n >= (def.compactMinTokens ?? COMPACT_MIN_TOKENS);
   }
 
@@ -213,10 +293,12 @@ export class TaskQueue {
       try { attachments = this.d.attachments.resolve(input.attachments); } catch (e) { throw new BadTask((e as Error).message); }
       if (!attachments.length) attachments = null;
     }
+    const output = input.output === undefined || input.output === null || (input.output as string) === '' ? null : input.output;
+    if (output !== null && !OUTPUT_FORMATS.includes(output)) throw new BadTask('Đầu ra phải là web, xlsx hoặc csv');
     const t: Task = {
       id: randomUUID(), kind, skill, args, prompt, model, permissionMode: mode, status: 'queued',
       position: this.queuedIds().length + 1, sessionId: null, resumeOf, createdAt: new Date().toISOString(),
-      startedAt: null, endedAt: null, resultText: null, changedFiles: null, error: null, costUsd: null, baseRef: null, attachments,
+      startedAt: null, endedAt: null, resultText: null, changedFiles: null, error: null, costUsd: null, baseRef: null, attachments, output,
     };
     this.save(t);
     void this.pump();
@@ -224,12 +306,12 @@ export class TaskQueue {
   }
 
   /** T-TC-07: continue a finished task's session with a new prompt. */
-  resume(id: string, prompt: string, attachments?: string[]): Task {
+  resume(id: string, prompt: string, attachments?: string[], output?: TaskOutputFormat | null): Task {
     const t = this.get(id);
     if (!t) throw new BadTask('Không có task này');
     if (!t.sessionId) throw new BadTask('Task này chưa có session để tiếp tục');
     if (!['completed', 'failed', 'cancelled'].includes(t.status)) throw new BadTask('Chỉ tiếp tục được task đã kết thúc');
-    return this.create({ kind: 'prompt', prompt, resumeOf: t.sessionId, model: t.model, permissionMode: t.permissionMode, ...(attachments ? { attachments } : {}) });
+    return this.create({ kind: 'prompt', prompt, resumeOf: t.sessionId, model: t.model, permissionMode: t.permissionMode, ...(attachments ? { attachments } : {}), ...(output ? { output } : {}) });
   }
 
   /** Moves a queued task to 1-based `position`. */

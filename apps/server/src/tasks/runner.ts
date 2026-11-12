@@ -3,6 +3,8 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { STUDIO_PLUGIN_DIR } from '../studio-plugin';
 import { attachmentDirs, withAttachments } from './attachments';
+import { withOutput } from './outputs';
+import fs from 'node:fs';
 import type { PermissionDecision, PendingInteraction, QuestionAnswer, Task } from '@ccgs/shared';
 
 export type InteractionRequest = Omit<PendingInteraction, 'id' | 'taskId' | 'createdAt'>;
@@ -56,11 +58,23 @@ export const ASK_STYLE_HINT = `Asking the user (AskUserQuestion): the user answe
 - Keep each question to one or two short sentences that point at the draft above (for example "Is the Localization section above right?"). Do not put the content itself in the question.
 - Option labels: 1 to 5 words. Option descriptions: one short sentence.`;
 
-/** SDK options from SessionExtras; empty lists are left out. ASK_STYLE_HINT always leads the system prompt. */
+/**
+ * Studio rules 6–8 (api-contract §12) for every task: subagents cannot see the game, new UI starts from the project's
+ * reference screen, and UI work is not done until it was rendered and compared.
+ */
+export const WORK_RULES_HINT = `Working in this game project (CCGS Studio rules):
+- Work that needs to see the game or act in the engine (render, read real component values, edit prefabs or scenes) stays in this session with the engine MCP tools. Do not hand it to a subagent: subagents cannot see the screen and often lack those tools.
+- New UI is built from the reference screen named in design/conventions.md when that file exists (duplicate it; keep its frame, close button and button styles). Say which reference you used.
+- Do not report UI work as done from code alone: render it and compare it with the reference screen first.`;
+
+/** What every task's system prompt starts with. */
+export const BASE_SYSTEM_PROMPT = `${ASK_STYLE_HINT}\n\n${WORK_RULES_HINT}`;
+
+/** SDK options from SessionExtras; empty lists are left out. BASE_SYSTEM_PROMPT always leads the system prompt. */
 export function extrasOptions(x: SessionExtras | null | undefined): Record<string, unknown> {
   // A bare string takes the same SDK path as the default (custom prompt, "" when omitted).
   // appendSubagentSystemPrompt is read by SDK 0.3.319 (sent in initialize) but not in its typings yet.
-  const systemPrompt = [ASK_STYLE_HINT, x?.systemPrompt].filter(Boolean).join('\n\n');
+  const systemPrompt = [BASE_SYSTEM_PROMPT, x?.systemPrompt].filter(Boolean).join('\n\n');
   return {
     ...(x?.mcpServers && Object.keys(x.mcpServers).length ? { mcpServers: x.mcpServers } : {}),
     ...(x?.allowedTools?.length ? { allowedTools: x.allowedTools } : {}),
@@ -131,6 +145,8 @@ export interface SdkRunnerConfig {
   summarize: (tool: string, input: unknown) => string;
   /** More local plugin folders for each task, read when the task starts (for example context-mode). */
   plugins?: () => string[];
+  /** Folder where Claude writes the output asked for (Task.output), outside the game project. */
+  outputsDir?: (taskId: string) => string;
 }
 
 // The server is CommonJS and the SDK is ESM-only: keep a real import() through tsc.
@@ -183,6 +199,9 @@ export function sdkRunner(cfg: SdkRunnerConfig): Runner {
       let compactTotalUsd: number | null = null, contextTokens: number | null = null;
       try {
         const { query } = await esmImport('@anthropic-ai/claude-agent-sdk');
+        const outDir = task.output && cfg.outputsDir ? cfg.outputsDir(task.id) : null;
+        if (outDir) fs.mkdirSync(outDir, { recursive: true });
+        const dirs = [...attachmentDirs(task.attachments), ...(outDir ? [outDir] : [])];
         const options = {
             cwd: cfg.cwd(),
             model: task.model ?? undefined,
@@ -194,7 +213,7 @@ export function sdkRunner(cfg: SdkRunnerConfig): Runner {
             abortController: abort,
             canUseTool,
             ...extrasOptions(opts?.extras),
-            ...(task.attachments?.length ? { additionalDirectories: attachmentDirs(task.attachments) } : {}),
+            ...(dirs.length ? { additionalDirectories: dirs } : {}),
             spawnClaudeCodeProcess: (o: any) => {
               child = spawn(o.command, o.args, { cwd: o.cwd, env: o.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, signal: o.signal });
               child.stderr?.on('data', (d: Buffer) => { stderrTail = (stderrTail + d.toString('utf8')).slice(-2000); });
@@ -219,7 +238,7 @@ export function sdkRunner(cfg: SdkRunnerConfig): Runner {
           } catch (e) { hooks.log('warn', `/compact lỗi, chạy task trên session chưa compact: ${(e as Error).message}`); }
         }
         if (abort.signal.aborted) throw new Error('Task bị dừng');
-        q = query({ prompt: withAttachments(task.prompt, task.attachments), options: { ...options, ...(resume ? { resume } : {}) } });
+        q = query({ prompt: withOutput(withAttachments(task.prompt, task.attachments), task.output, outDir), options: { ...options, ...(resume ? { resume } : {}) } });
         for await (const m of q) {
           if (m.session_id && m.session_id !== sessionId) { sessionId = m.session_id; hooks.onSession(m.session_id); }
           askCtx.see(m);

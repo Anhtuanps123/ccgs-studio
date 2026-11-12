@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { AgentInvocation, ConversationItem, FileActivity, LogEntry, TimelineStep, ToolCall, ToolCallDetail, TranscriptItem } from '@ccgs/shared';
 import { api, live, useApi } from '../api';
 import {
-  Duration, Legend, NoSessions, SessionPicker, SessionTags, Status, agentLabel, clock, fmtDur, useLiveApi, useNow, useSession, when,
+  DeleteSessionButton, Duration, Legend, NoSessions, SessionPicker, SessionTags, Status, agentLabel, clock, fmtDur, useLiveApi, useNow, useSession, when,
 } from '../monitor';
 import { DiffView, TranscriptView } from '../insights';
 
@@ -13,7 +13,7 @@ function Head({ title, sub, ses, right }: { title: string; sub: React.ReactNode;
   return (
     <div className="view-head">
       <div><h1>{title}</h1><p>{sub}</p></div>
-      <div className="row" style={{ alignItems: 'flex-end' }}>{right}<SessionPicker ses={ses} /></div>
+      <div className="row" style={{ alignItems: 'flex-end' }}>{right}<SessionPicker ses={ses} /><DeleteSessionButton ses={ses} /></div>
     </div>
   );
 }
@@ -351,6 +351,14 @@ export function Logs() {
   }, [level, source, q, session, from, to]);
 
   const more = () => next && api<{ items: LogEntry[]; next: number | null }>(qs(next)).then(r => { setItems(xs => [...xs, ...r.items]); setNext(r.items.length ? r.next : null); });
+  const filtered = !!(level || source || q || session || from || to);
+  const clearLogs = async () => {
+    if (!confirm(filtered ? 'Xoá mọi log khớp bộ lọc đang chọn (kể cả phần chưa tải)? Không khôi phục được.' : 'Không có bộ lọc: xoá TOÀN BỘ log? Không khôi phục được.')) return;
+    try {
+      const r = await api<{ deleted: number }>(qs(), { method: 'DELETE' });
+      setItems([]); setNext(null); setError(`Đã xoá ${r.deleted} log.`);
+    } catch (e) { setError((e as Error).message); }
+  };
 
   return (
     <>
@@ -369,6 +377,7 @@ export function Logs() {
           <label className="small muted row" style={{ gap: 4 }}>Từ <input type="datetime-local" value={from} onChange={e => setFrom(e.target.value)} style={{ width: 'auto' }} /></label>
           <label className="small muted row" style={{ gap: 4 }}>Đến <input type="datetime-local" value={to} onChange={e => setTo(e.target.value)} style={{ width: 'auto' }} /></label>
           {(session || from || to) && <button className="btn sm" onClick={() => { setSession(''); setFrom(''); setTo(''); }}>Bỏ lọc</button>}
+          <button className="btn sm" style={{ marginLeft: 'auto' }} onClick={clearLogs}>{filtered ? 'Xoá log khớp bộ lọc' : 'Xoá toàn bộ log'}</button>
         </div>
         <div className="tablewrap"><table>
           <thead><tr><th>Thời gian</th><th>Mức</th><th>Nguồn</th><th>Session</th><th>Nội dung</th></tr></thead>

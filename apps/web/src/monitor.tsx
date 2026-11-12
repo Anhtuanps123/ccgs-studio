@@ -65,11 +65,33 @@ export function useLiveApi<T>(path: string | null, sessionId: string | null, eve
 /** Selected session from ?s=, defaulting to the most recent one. */
 export function useSession() {
   const [sp, setSp] = useSearchParams();
-  const list = useLiveApi<SessionRow[]>('/api/sessions', null, ['session:upsert']);
+  const list = useLiveApi<SessionRow[]>('/api/sessions', null, ['session:upsert', 'monitor:cleared']);
   const id = sp.get('s') ?? list.data?.[0]?.id ?? null;
   const current = list.data?.find(s => s.id === id) ?? null;
   const select = (sid: string) => { const n = new URLSearchParams(sp); n.set('s', sid); setSp(n, { replace: true }); };
-  return { list: list.data, error: list.error, id, current, select };
+  /** After a delete: back to the most recent session. */
+  const clear = () => { const n = new URLSearchParams(sp); n.delete('s'); setSp(n, { replace: true }); list.reload(); };
+  return { list: list.data, error: list.error, id, current, select, clear };
+}
+
+/** "Xoá session": the selected session with its events, agents, tool calls and logs (DELETE /api/sessions/:id). */
+export function DeleteSessionButton({ ses }: { ses: ReturnType<typeof useSession> }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  if (!ses.id) return null;
+  const running = !!ses.current?.live;
+  const go = async () => {
+    if (!ses.id || !confirm(`Xoá session ${ses.id.slice(0, 8)} cùng event, agent, tool call và log của nó? Không khôi phục được. Task trong Task Center vẫn giữ.`)) return;
+    setBusy(true); setErr(null);
+    try { await api(`/api/sessions/${encodeURIComponent(ses.id)}`, { method: 'DELETE' }); ses.clear(); }
+    catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <span className="stack" style={{ gap: 2 }}>
+      <button className="btn" disabled={busy || running} title={running ? 'Session đang chạy, chưa xoá được' : ''} onClick={go}>Xoá session</button>
+      {err && <span className="badge-err small">{err}</span>}
+    </span>
+  );
 }
 
 export function SessionPicker({ ses }: { ses: ReturnType<typeof useSession> }) {

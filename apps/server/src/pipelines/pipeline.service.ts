@@ -5,11 +5,12 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import type { Attachment, CriticIssue, CritiqueRound, NewPipeline, Pipeline, PipelineGraphContext, PipelineMode, PipelineSetup, PipelineStep, PlanIssue, PlanRoleInfo, Rigor, Task } from '@ccgs/shared';
+import type { Attachment, CriticIssue, CritiqueRound, NewPipeline, OpenItem, Pipeline, PipelineGraphContext, PipelineMode, PipelineSetup, PipelineStep, PlanIssue, PlanRoleInfo, ProjectRuleState, Rigor, Task } from '@ccgs/shared';
 import type { Db } from '../store/db';
 import { BadTask, TaskQueue } from '../tasks/task-queue';
-import { activeRoles, checkPlan, fillRoles, loadRoles, loadTemplates, rolesPrompt, slugOf, templatesPrompt, type PlanRoleDef, type PlanTemplate } from './plan-rules';
+import { activeRoles, checkPlan, fillRoles, loadRoles, loadTemplates, roleOfSkill, rolesPrompt, slugOf, templatesPrompt, type PlanRoleDef, type PlanTemplate } from './plan-rules';
 import { checkStep } from './checkpoint';
+import { openItemsPrompt, PLANNER_RULES, projectState, ruleChecklist, storyGate, storySteps } from './studio-rules';
 import { keywordsFromInput, keywordsFromRequest } from '../graph/graph-core';
 import type { GraphContext } from '../graph/graph.service';
 import type { SessionExtras } from '../tasks/runner';
@@ -70,7 +71,7 @@ const MAX_STEPS = 40;
 const ENDED: Task['status'][] = ['completed', 'failed', 'cancelled'];
 const cut = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
-export function plannerPrompt(request: string, skills: SkillInfo[], rigor?: Rigor | null, setup?: PipelineSetup | null, gameScan?: string | null, templates: PlanTemplate[] = [], codeMap?: { keywords: string[]; text: string } | null, roles: PlanRoleDef[] = [], chosen: string[] | null = null): string {
+export function plannerPrompt(request: string, skills: SkillInfo[], rigor?: Rigor | null, setup?: PipelineSetup | null, gameScan?: string | null, templates: PlanTemplate[] = [], codeMap?: { keywords: string[]; text: string } | null, roles: PlanRoleDef[] = [], chosen: string[] | null = null, openItems: OpenItem[] = []): string {
   const list = skills.map(s => `- /${s.name}${s.argumentHint ? ` ${s.argumentHint}` : ''}: ${cut(s.description.replace(/\s+/g, ' '), 160)}`).join('\n');
   return `You are planning work for CCGS Studio. Do NOT modify any file and do not run commands that change anything; only read (Read, Glob, Grep) to understand the project.
 
@@ -92,7 +93,9 @@ Plan templates (the studio standard). Pick exactly ONE template id as "type" and
 ${templatesPrompt(templates, rigor ?? 'minimal')}
 "slug": the feature id in kebab-case (for example piggy-bank); it fills {slug} in the template.
 ` : ''}
-${roles.length ? rolesPrompt(roles, chosen) + '\n\n' : ''}${gameScan ? `What the game already has (scanned from the Unity Editor through Unity MCP; build on it, do not redo existing screens):
+${PLANNER_RULES}
+
+${openItems.length ? openItemsPrompt(openItems) + '\n\n' : ''}${roles.length ? rolesPrompt(roles, chosen) + '\n\n' : ''}${gameScan ? `What the game already has (scanned from the Unity Editor through Unity MCP; build on it, do not redo existing screens):
 """
 ${cut(gameScan, 6000)}
 """
@@ -158,6 +161,7 @@ ${JSON.stringify(pending, null, 1)}
 \`\`\`
 
 Keep the rules of the first plan (rigor ${rigor}${t ? `; template ${templatesPrompt([t], rigor).replace(/^- /, '')}` : ''}; art context before UI; "expand": "stories" on /create-stories${rolesNote(p, roles)}). Do not repeat a completed step unless its result must be redone, and then say why.
+${PLANNER_RULES}
 Reply with a short explanation in Vietnamese, then exactly one JSON block: {"summary", ${templates.length ? '"type", "slug", "omitted", ' : ''}"steps"} where "steps" are ONLY the steps still to run, in order.`;
 }
 /** "; only the roles Designer, Developer" when the user limited the roles, else ''. */
@@ -286,6 +290,19 @@ export class PipelineService {
     d.db.$client.exec('CREATE TABLE IF NOT EXISTS pipelines (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, data TEXT NOT NULL)');
     d.queue.bus.on('task', t => { if (ENDED.includes(t.status)) this.onTaskEnded(t); });
     if (d.graph?.mcpSession) d.queue.setSessionExtras(t => this.sessionExtras(t));
+    d.queue.setKeep(() => this.taskKeep());
+  }
+
+  /** Tasks the history must keep: every task of a plan that has not ended (it may continue, re-plan or count cost). */
+  taskKeep(): Map<string, string> {
+    const keep = new Map<string, string>();
+    for (const p of this.list(500)) {
+      if (p.status === 'completed' || p.status === 'cancelled') continue;
+      const why = `thuộc chuỗi kế hoạch "${cut(p.request, 50)}" chưa kết thúc (${p.status})`;
+      const ids = [p.planTaskId, p.critiqueTaskId, ...(p.planTasks ?? []), ...(p.critiques ?? []).flatMap(c => [c.planTaskId, c.taskId]), ...p.steps.map(s => s.taskId)];
+      for (const id of ids) if (id) keep.set(id, why);
+    }
+    return keep;
   }
 
   /**
@@ -323,16 +340,23 @@ export class PipelineService {
     return r.templates;
   }
 
-  /** Runs the plan check and stores steps + issues on the pipeline. */
+  private root() { return this.d.project ? this.d.project() : null; }
+
+  /** Runs the plan check and stores steps + issues + the studio rules checklist on the pipeline. */
   private check(p: Pipeline, byUser: boolean, omitted = p.omitted ?? []) {
     const known = this.known();
+    const rigor = (p.rigor ?? 'minimal') as Rigor;
     const r = checkPlan({
-      steps: p.steps, type: p.planType ?? null, slug: p.slug ?? null, omitted, rigor: (p.rigor ?? 'minimal') as Rigor, request: p.request,
-      templates: this.templates(), root: this.d.project ? this.d.project() : null, byUser,
+      steps: p.steps, type: p.planType ?? null, slug: p.slug ?? null, omitted, rigor, request: p.request,
+      templates: this.templates(), root: this.root(), byUser, known,
       make: s => normalizeStep(s, known, true), roles: this.roles(), chosen: p.roles ?? null,
     });
     p.steps = r.steps; p.issues = r.issues; p.omitted = omitted; p.planTypeTitle = r.template?.title ?? null;
+    p.rules = ruleChecklist({ steps: p.steps, issues: r.issues, ui: !!r.template?.ui, request: p.request, type: r.template?.id ?? p.planType ?? null, slug: p.slug ?? null, root: this.root(), rigor });
   }
+
+  /** GET /api/pipelines/project-state: what the studio rules see in the project (rigor, epics, GDDs, conventions, active.md). */
+  projectState(): ProjectRuleState { return projectState(this.root(), this.setup().rigor); }
 
   get(id: string): Pipeline | null {
     const r = this.d.db.$client.prepare('SELECT data FROM pipelines WHERE id = ?').get(id) as any;
@@ -443,7 +467,8 @@ export class PipelineService {
 
   /** Creates the first planner task (with the code map lookup, if any) and records it on the pipeline (not saved). */
   private startPlanner(p: Pipeline, codeMap: { keywords: string[]; text: string } | null, setup = this.setup(), gameScan: string | null = this.d.scan?.().summary ?? null): Pipeline {
-    const t = this.d.queue.create({ kind: 'prompt', prompt: plannerPrompt(p.request, this.d.skills(), p.rigor, setup, gameScan, this.templates(), codeMap, this.roles(), p.roles ?? null), permissionMode: 'default', ...(p.model ? { model: p.model } : {}), ...attachOf(p) });
+    const open = projectState(this.root(), p.rigor ?? null).openItems;
+    const t = this.d.queue.create({ kind: 'prompt', prompt: plannerPrompt(p.request, this.d.skills(), p.rigor, setup, gameScan, this.templates(), codeMap, this.roles(), p.roles ?? null, open), permissionMode: 'default', ...(p.model ? { model: p.model } : {}), ...attachOf(p) });
     p.planTaskId = t.id; p.planTasks = [...(p.planTasks ?? []), t.id];
     return p;
   }
@@ -501,8 +526,30 @@ export class PipelineService {
     const err = (p.issues ?? []).find(i => i.level === 'error');
     if (err) throw new BadPipeline(`Kế hoạch chưa đạt chuẩn: ${err.message}`);
     if (!p.steps.some(s => s.status === 'pending')) throw new BadPipeline('Không còn bước nào để chạy');
+    // Continuing after the open-question gate (rule 3) means the user accepts those questions for that step.
+    const gated = p.steps.find(s => s.status === 'pending');
+    if (gated?.gate && !gated.gate.acknowledged && p.checkpoint?.stepId === gated.id) gated.gate.acknowledged = true;
     p.status = 'running'; p.error = null; p.note = null; p.checkpoint = null;
     return this.runNext(p);
+  }
+
+  /**
+   * Rule 3: right before /dev-story, open questions in the story and its GDD/UX stop the run once.
+   * Returns true when the pipeline was paused (saved) instead of running the step.
+   */
+  private gateStory(p: Pipeline, s: PipelineStep): boolean {
+    const root = this.root();
+    if (s.skill !== 'dev-story' || !s.args || !root || s.gate?.acknowledged) return false;
+    let g: { items: string[]; files: string[] };
+    try { g = storyGate(root, s.args, p.slug ?? null); } catch (e) { this.bus.emit('log', 'warn', `Không đọc được story để kiểm câu hỏi mở: ${(e as Error).message}`); return false; }
+    if (!g.items.length) { s.gate = null; return false; }
+    s.gate = { kind: 'open-questions', items: g.items, files: g.files, acknowledged: false };
+    const reason = `Còn ${g.items.length} câu hỏi chưa chốt trong ${g.files.join(', ')} trước khi code "${s.title}".`;
+    p.status = 'paused'; p.error = null;
+    p.checkpoint = { decision: 'pause', verdict: null, reason, replan: false, question: null, stepId: s.id };
+    p.note = `${reason} Chốt rồi sửa tài liệu, hoặc bấm Tiếp tục để code theo hiện trạng (quy tắc 3).`;
+    this.save(p);
+    return true;
   }
 
   retry(id: string, stepId: string): Pipeline {
@@ -592,6 +639,7 @@ export class PipelineService {
       this.bus.emit('log', 'info', `Chuỗi "${cut(p.request, 60)}" đã xong.`);
       return this.save(p);
     }
+    if (this.gateStory(p, next)) return p;
     try {
       const t = this.d.queue.create({
         ...(next.skill ? { kind: 'skill' as const, skill: next.skill, args: next.args ?? undefined } : { kind: 'prompt' as const, prompt: next.prompt ?? '' }),
@@ -758,10 +806,12 @@ export class PipelineService {
       const stories = storiesFrom(t);
       const at = p.steps.indexOf(s) + 1;
       const known = this.known();
-      const added = stories.flatMap(f => [
-        normalizeStep({ title: `Làm story ${f.split('/').pop()}`, skill: 'dev-story', args: f }, known, true),
-        normalizeStep({ title: `Đóng story ${f.split('/').pop()}`, skill: 'story-done', args: f }, known, true),
-      ]);
+      // Rules 2 and 8: readiness before code (standard/full), UI compare before closing (UI template); never a skill of a role the user left out.
+      const roles = this.roles();
+      const act = activeRoles(p.roles, roles);
+      const allow = (skill: string) => { const r = act ? roleOfSkill(skill, roles) : null; return !r || act!.includes(r); };
+      const ui = !!this.templates().find(x => x.id === p.planType)?.ui;
+      const added = stories.flatMap(f => storySteps(f, { rigor: (p.rigor ?? 'minimal') as Rigor, ui, known, allow }).map(x => normalizeStep(x, known, true)));
       p.steps.splice(at, 0, ...added);
       p.note = stories.length ? `Đã thêm ${added.length} bước cho ${stories.length} story.` : 'Bước chia việc không tạo file story nào; thêm bước tay nếu cần.';
     }

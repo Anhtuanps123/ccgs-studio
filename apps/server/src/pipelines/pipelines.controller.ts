@@ -15,6 +15,7 @@ export class PipelinesController {
   @Get() list() { return this.p.list(); }
   @Get('setup') setup() { return this.p.setup(); }
   @Get('studio-skills') studioSkills() { return studioSkills(); }
+  @Get('project-state') projectState() { return this.p.projectState(); }
   @Get('roles') roles() { return this.p.roleList(); }
   @Get(':id') one(@Param('id') id: string) { const x = this.p.get(id); if (!x) throw new NotFoundException('Không có chuỗi này'); return x; }
   @Post() create(@Body() b: NewPipeline) { return wrap(() => this.p.create(b)); }

@@ -33,6 +33,23 @@ export interface Skill {
   parseError: string | null;
 }
 export interface SkillDetail extends Skill { body: string; file: string | null; }
+/** Giải thích skill (api-contract §16): what Studio reads from SKILL.md and the workflow catalog, no Claude call. */
+export interface SkillFacts {
+  workflow: { phase: string; step: string; required: boolean; prev: string | null; next: string | null }[];
+  phases: string[];
+  mentions: string[];
+}
+/** Plain-language explanation written by Claude from SKILL.md (Vietnamese). */
+export interface SkillExplain {
+  purpose: string; whenToUse: string[]; needs: string[]; steps: string[]; outputs: string[]; writes: string; limits: string[]; next: string[];
+}
+export interface SkillGuide {
+  name: string; hash: string; facts: SkillFacts;
+  explain: SkillExplain | null; explainedAt: string | null;
+  /** The explanation was written from an older SKILL.md. */
+  stale: boolean;
+  taskId: string | null; taskStatus: TaskStatus | null; error: string | null;
+}
 
 export interface Rule { file: string; paths: string[]; body: string; }
 export interface HookEntry {
@@ -279,6 +296,8 @@ export interface Task {
   mcp?: TaskMcp | null;
   /** Files the user attached; their paths are appended to the prompt sent to Claude (not stored in `prompt`). */
   attachments?: Attachment[] | null;
+  /** Output format asked for (api-contract §15); null/absent when none. */
+  output?: TaskOutputFormat | null;
 }
 /**
  * servers: names of the MCP servers attached (empty when none). note: Vietnamese, why (not) attached.
@@ -287,7 +306,7 @@ export interface Task {
  */
 export interface TaskMcp { servers: string[]; note: string | null; calls: Record<string, number> | null }
 /** resumeOf: session id to continue (T-TC-07). Unset fields take the task defaults (S-03). */
-export interface NewTask { kind: 'prompt' | 'skill'; skill?: string; args?: string; prompt?: string; model?: string | null; permissionMode?: PermissionMode; resumeOf?: string; attachments?: string[]; }
+export interface NewTask { kind: 'prompt' | 'skill'; skill?: string; args?: string; prompt?: string; model?: string | null; permissionMode?: PermissionMode; resumeOf?: string; attachments?: string[]; output?: TaskOutputFormat | null; }
 
 /** A file the user attached to a request, stored under ~/.ccgs-studio/attachments/<id>/. Claude opens it with Read. */
 export interface Attachment { id: string; name: string; size: number; mime: string; path: string }
@@ -317,6 +336,8 @@ export interface PermissionDecision { decision: 'allow' | 'deny'; message?: stri
 
 /** T-DB-03 */
 export interface CurrentTask { task: Task | null; activeAgents: AgentInvocation[]; queued: number; pending: number }
+/** DELETE /api/tasks/:id, POST /api/tasks/clear: ids deleted, and ended tasks kept with the reason (e.g. part of an unfinished plan). */
+export interface TaskRemoveResult { deleted: string[]; kept: { id: string; reason: string }[] }
 
 // ---------- Phase 4: P1 ----------
 
@@ -346,8 +367,24 @@ export interface FileActivity { toolCallId: string; invocationId: string; at: st
 /** T-TC-06 */
 export interface TaskDiff { path: string; change: ChangedFile['change']; diff: string | null; note: string | null }
 
+/**
+ * "Đầu ra" of a task: a file it added or changed, with what Studio can do with it (api-contract §15).
+ * kind: web = .html (view sandboxed), doc = .md (export xlsx/csv), image, data = csv/json, other.
+ * preview: /preview/... URL for HTML under prototypes/ (relative assets work there); null otherwise.
+ */
+export type TaskOutputKind = 'web' | 'doc' | 'image' | 'data' | 'other';
+/**
+ * Paths starting with `~studio/` are files Claude wrote to the task's Studio folder (~/.ccgs-studio/outputs/<id>/)
+ * because an output format was asked for; change is 'A' for them.
+ */
+export interface TaskOutput { path: string; change: ChangedFile['change']; kind: TaskOutputKind; exists: boolean; size: number | null; preview: string | null; tables: number | null }
+/** Output asked for when creating a task: web = one self-contained HTML page, xlsx = Studio builds it from Claude's tables, csv. */
+export type TaskOutputFormat = 'web' | 'xlsx' | 'csv';
+export const OUTPUT_FORMATS: TaskOutputFormat[] = ['web', 'xlsx', 'csv'];
+
 /** M-PF-01, T-AG-04, M-PF-04 */
-export interface TaskStats { total: number; completed: number; failed: number; cancelled: number; avgDurationMs: number | null; totalCostUsd: number | null }
+/** `since`: set by Hiệu suất "Xoá số liệu" (DELETE /api/stats); task and agent stats count only from then. */
+export interface TaskStats { since?: string | null; total: number; completed: number; failed: number; cancelled: number; avgDurationMs: number | null; totalCostUsd: number | null }
 export interface AgentStats { agentType: string; calls: number; completed: number; failed: number; unknown: number; avgDurationMs: number | null; lastAt: string | null }
 
 /** T-PJ-02 */
@@ -383,6 +420,22 @@ export interface PipelineStep extends PlanStep {
   check?: StepCheck | null;
   /** This step was added by a checkpoint to fix the step with this id (one automatic fix per step). */
   fixOf?: string | null;
+  /** Gate checked right before the step runs (rule 3: open questions before /dev-story). */
+  gate?: StepGate | null;
+}
+/** Open questions found in a story and its design docs before /dev-story; the user continues to accept them. */
+export interface StepGate { kind: 'open-questions'; items: string[]; files: string[]; acknowledged: boolean }
+/** One line of the studio rules checklist (rules 1–9, apps/server/src/pipelines/studio-rules.ts). Display only. */
+export interface RuleCheck { rule: number; title: string; state: 'ok' | 'warn' | 'todo' | 'na'; detail: string }
+/** A pending item of production/session-state/active.md. */
+export interface OpenItem { text: string; kind: 'checkpoint' | 'open' | 'unreviewed' }
+/** GET /api/pipelines/project-state: what the studio rules look at in the project. */
+export interface ProjectRuleState {
+  rigor: Rigor | null; epics: number; gdds: number;
+  conventions: { path: string; exists: boolean };
+  openItems: OpenItem[];
+  /** Path of active.md when it exists, else null. */
+  openSource: string | null;
 }
 /** What the studio decided after a step, by rule: go on, insert fix steps, or stop for the user. */
 export interface StepCheck {
@@ -426,6 +479,8 @@ export interface Pipeline {
   graph?: PipelineGraphContext | null;
   /** Files attached to the request: given to the planner, the critic and every step. */
   attachments?: Attachment[];
+  /** Studio rules checklist, recomputed at every plan check (display only, never blocks). */
+  rules?: RuleCheck[];
 }
 /** One finding of the plan check (apps/server/src/pipelines/plan-rules.ts). */
 export interface PlanIssue { level: 'error' | 'warn' | 'info'; rule: string; message: string; stepId: string | null }
@@ -462,7 +517,13 @@ export interface GameScan {
   summary: string | null; images: string[]; error: string | null;
   /** /start run from this scan's session; startDoneAt set when it completed (even if it did not save project.yaml). */
   startTaskId?: string | null; startDoneAt?: string | null;
+  /** Skills after /start run from this scan's session (Bước 0 buttons); doneAt set when the task completed. */
+  steps?: Partial<Record<ScanStepSkill, { taskId: string; doneAt: string | null }>>;
 }
+/** Skills the Bước 0 card runs from the scan session, in order. POST /api/scan/skill/:name. */
+export const SCAN_SKILLS = ['start', 'project-stage-detect', 'adopt'] as const;
+export type ScanSkill = typeof SCAN_SKILLS[number];
+export type ScanStepSkill = Exclude<ScanSkill, 'start'>;
 
 // ---------- Sidebar alerts ----------
 /** Sidebar item ids (route without the leading slash). */

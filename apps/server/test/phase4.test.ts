@@ -144,6 +144,51 @@ describe('T-AG-04 / M-PF-01 stats, S-04 purge, P1 spool', () => {
     expect(svc.events('old')).toEqual([]);
   });
 
+  it('delete buttons: one session with its rows, logs by filter, stats from a moment', () => {
+    const svc = new MonitorService(settingsStub);
+    const cleared: string[] = [];
+    svc.bus.on('cleared', x => cleared.push(x.what));
+    const send = (sid: string, at: string, p: object) => svc.ingest({ v: 1, receivedAt: at, taskId: null, origin: 'local-settings', payload: { session_id: sid, ...p } });
+    send('done', '2026-11-09T12:00:01Z', { hook_event_name: 'SubagentStart', agent_id: 'a1', agent_type: 'qa-tester' });
+    send('done', '2026-11-09T12:00:02Z', { hook_event_name: 'SubagentStop', agent_id: 'a1', agent_type: 'qa-tester' });
+    send('done', '2026-11-09T12:00:03Z', { hook_event_name: 'SessionEnd' });
+    send('live', '2026-11-09T12:00:04Z', { hook_event_name: 'SessionStart' });
+    send('task', '2026-11-09T12:00:05Z', { hook_event_name: 'SessionEnd' });
+    svc.log('info', 'hook', 'of done', 'done');
+    svc.log('info', 'hook', 'of live', 'live');
+    svc.db.$client.prepare(`INSERT INTO tasks (id, kind, prompt, permission_mode, status, created_at, session_id) VALUES ('tk', 'prompt', 'p', 'default', 'waiting', '2026-11-09T12:00:00Z', 'task')`).run();
+
+    expect(svc.deleteSession('nope')).toBeNull();
+    expect(svc.deleteSession('live')).toMatchObject({ busy: expect.stringMatching(/đang chạy/) });
+    expect(svc.deleteSession('task')).toMatchObject({ busy: expect.stringMatching(/task đang chạy/) });
+    expect(svc.deleteSession('done')).toMatchObject({ events: 3, logs: 1 });
+    expect(svc.getSession('done')).toBeNull();
+    expect(svc.invocations('done')).toEqual([]);
+    expect(svc.getSession('live')).not.toBeNull();
+    expect(svc.db.$client.prepare('SELECT COUNT(*) n FROM tasks').get()).toEqual({ n: 1 });
+
+    svc.log('warn', 'studio', 'Boom one');
+    svc.log('error', 'studio', 'boom two');
+    expect(svc.deleteLogs({ q: 'BOOM', level: 'warn' })).toBe(1);
+    expect(svc.logs({}).items.map(l => l.message)).toEqual(expect.arrayContaining(['boom two', 'of live']));
+    expect(svc.deleteLogs({ session: 'live' })).toBe(1);
+    expect(svc.deleteLogs({})).toBeGreaterThan(0);
+    expect(svc.logs({}).items).toEqual([]);
+
+    expect(svc.statsSince()).toBeNull();
+    send('s2', '2026-11-09T13:00:00Z', { hook_event_name: 'SubagentStart', agent_id: 'b1', agent_type: 'old-agent' });
+    send('s2', '2026-11-09T15:00:00Z', { hook_event_name: 'SubagentStart', agent_id: 'b2', agent_type: 'new-agent' });
+    const ins = svc.db.$client.prepare(`INSERT INTO tasks (id, kind, prompt, permission_mode, status, created_at, ended_at) VALUES (?, 'prompt', 'p', 'default', 'completed', ?, ?)`);
+    ins.run('old', '2026-11-09T13:00:00Z', '2026-11-09T13:30:00Z');
+    ins.run('new', '2026-11-09T14:30:00Z', '2026-11-09T15:00:00Z');
+    expect(svc.taskStats().total).toBe(2);
+    svc.resetStats('2026-11-09T14:00:00Z');
+    expect(svc.taskStats()).toMatchObject({ since: '2026-11-09T14:00:00Z', total: 1 });
+    expect(svc.agentStats().map(a => a.agentType)).toEqual(['new-agent']);
+    expect(svc.db.$client.prepare('SELECT COUNT(*) n FROM tasks').get()).toEqual({ n: 3 }); // nothing deleted
+    expect(cleared).toEqual(['session', 'logs', 'logs', 'logs', 'stats']);
+  });
+
   it('loads events from the spool once and deletes it', () => {
     const svc = new MonitorService(settingsStub);
     const f = path.join(tmp, 'spool.jsonl');

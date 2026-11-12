@@ -34,10 +34,11 @@ describe('plan templates', () => {
 describe('checkPlan', () => {
   it('feature-ui minimal: inserts art context before the first UI step, no errors', () => {
     const r = run(['quick-design', 'ux-design', 'create-stories']);
-    expect(r.steps.map(s => s.skill)).toEqual(['quick-design', ART_SKILL, 'ux-design', 'create-stories']);
-    expect(r.steps[1]).toMatchObject({ args: 'piggy-bank', generated: true });
+    expect(r.steps.map(s => s.skill)).toEqual(['studio:project-conventions', 'quick-design', ART_SKILL, 'ux-design', 'create-stories']);
+    expect(r.steps[0]).toMatchObject({ args: null, generated: true });
+    expect(r.steps[2]).toMatchObject({ args: 'piggy-bank', generated: true });
     expect(lv(r, 'error')).toEqual([]);
-    expect(lv(r, 'info')).toContain('art-context');
+    expect(lv(r, 'info')).toEqual(expect.arrayContaining(['art-context', 'conventions']));
   });
   it('art context sheet already on disk: no insert, missing step is info', () => {
     const d = root();

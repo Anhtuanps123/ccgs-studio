@@ -238,3 +238,104 @@ Plugin npm `context-mode` (đã cài kèm `apps/server`) giữ kết quả công
 - **`SystemStatus.contextModeVersion?: string | null`:** phiên bản trong `.claude-plugin/plugin.json` của gói đã cài, `null` khi chưa cài.
 - **Runner:** khi bật và gói có mặt, `plugins` của SDK là `[studio, context-mode]`; áp dụng cho task bắt đầu sau khi lưu. Gói thiếu thì task chạy như khi tắt.
 - Plugin thêm MCP server `context-mode` (công cụ `mcp__plugin_context-mode_context-mode__ctx_*`) và hook của nó; dữ liệu nằm ở `~/.context-mode` trên máy.
+
+## 12. Quy tắc dùng CCGS trong Studio (2026-11-12)
+
+Studio áp 9 quy tắc chung khi dùng CCGS (bản đầy đủ ở màn **Quy tắc**, `/rules`). Luật nằm ở `apps/server/src/pipelines/studio-rules.ts` (hàm thuần, không gọi LLM) và trong mẫu `plugin/plan-templates/*.yaml`.
+
+**Kiểu mới trong `packages/shared`:**
+- `StepGate {kind: 'open-questions', items: string[], files: string[], acknowledged: boolean}` và `PipelineStep.gate?: StepGate | null`.
+- `RuleCheck {rule: number, title: string, state: 'ok' | 'warn' | 'todo' | 'na', detail: string}` và `Pipeline.rules?: RuleCheck[]`.
+- `ProjectRuleState {rigor, epics, gdds, conventions: {path, exists}, openItems: OpenItem[], openSource: string | null}`, `OpenItem {text, kind: 'checkpoint' | 'open' | 'unreviewed'}`.
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | `/api/pipelines/project-state` | `ProjectRuleState`: rigor, số epic và GDD, có `design/conventions.md` chưa, các mục đang treo trong `production/session-state/active.md` |
+
+**Kiểm luật kế hoạch (`PlanIssue.rule`):**
+- `rigor` (quy tắc 1, `warn`): rigor `minimal` nhưng project đã có từ 3 epic hoặc 3 GDD trở lên.
+- `conventions` (quy tắc 7, `info`): mẫu có UI và chưa có `design/conventions.md`; Studio tự chèn `studio:project-conventions` đầu kế hoạch (chỉ với kế hoạch do planner lập).
+- `propagate` (quy tắc 4): kế hoạch thiết kế lại (`quick-design`, `design-system`, `ux-design`) cho slug đã có story trong `production/epics/<slug>/`. Studio tự chèn bước prompt "Cập nhật story cũ theo thiết kế mới" sau bước thiết kế cuối; nếu có `/design-system` thì chèn thêm `/propagate-design-change design/gdd/<slug>.md` (`info`). Người dùng sửa tay mà thiếu thì `warn`.
+- `fix-step` (quy tắc 5): mẫu `bugfix` mà không có bước nào sửa được (bước prompt hoặc `/dev-story`) thì `error`; yêu cầu có từ "sửa/fix/lỗi/bug" mà kế hoạch chỉ toàn skill đánh giá thì `warn`.
+- `ui-compare` (quy tắc 8): mẫu `bugfix` và yêu cầu nói về UI (popup, màn, nút, hiển thị, prefab…) mà thiếu `studio:ui-compare` thì Studio tự chèn sau bước sửa cuối (`info`); người dùng sửa tay thì `warn`.
+
+**Khi `/create-stories` sinh bước story (quy tắc 2, 8):** mỗi story có thêm `/story-readiness <story>` trước `/dev-story` khi rigor là `standard` hoặc `full`, và `studio:ui-compare <story>` trước `/story-done` khi mẫu kế hoạch có `ui: true`.
+
+**Cổng câu hỏi mở trước `/dev-story` (quy tắc 3):** ngay trước khi tạo task cho `/dev-story <story>`, server đọc file story, `design/gdd/<slug>.md` và `design/ux/*<slug>*.md`. Thấy câu hỏi chưa chốt (mục "Open Questions"/"Câu hỏi mở" còn gạch đầu dòng, hoặc dòng có `TBD`, `CẦN QUYẾT`, `chưa chốt`, `undecided`) thì không chạy: ghi `step.gate`, chuỗi chuyển `paused`, `checkpoint.reason` liệt kê câu hỏi. Bấm **Tiếp tục** (`POST /:id/start`) nghĩa là người dùng chấp nhận: `gate.acknowledged = true` rồi chạy bước đó.
+
+**Prompt:** prompt planner có thêm mục quy tắc Studio và các mục đang treo của `active.md` (tối đa 2.000 ký tự). System prompt của mọi task có thêm `WORK_RULES_HINT` (sau `ASK_STYLE_HINT`): việc cần nhìn hoặc thao tác trong engine thì làm ở session chính; UI mới dựng từ màn mẫu trong `design/conventions.md`.
+
+**`Pipeline.rules`:** server tính lại mỗi lần kiểm luật, một dòng cho mỗi quy tắc 1–9 (trạng thái `ok`/`warn`/`todo`/`na`). Chỉ để hiển thị, không chặn chạy.
+
+**Skill mới trong plugin `studio`:** `studio:project-conventions` (ghi `design/conventions.md`), `studio:ui-compare <story|prefab> [prefab mẫu]` (ghi ảnh và `compare.md` vào `production/qa/evidence/<slug>/`, kết thúc bằng `Verdict: PASS | CONCERNS | FAIL`). Cả hai chỉ đọc trong Unity.
+
+## 13. Xoá lịch sử Task Center (2026-11-12)
+
+| Method | Path | Mô tả |
+|---|---|---|
+| DELETE | `/api/tasks/:id` | Xoá một task đã kết thúc. Trả `TaskRemoveResult` |
+| POST | `/api/tasks/clear` `{status?, q?, skill?, before?}` | Xoá mọi task đã kết thúc khớp bộ lọc (cùng nghĩa với `GET /api/tasks`; `status` chỉ nhận `completed`, `failed`, `cancelled`, mặc định cả ba; `before` = ISO, chỉ xoá task kết thúc trước mốc này). Trả `TaskRemoveResult` |
+
+- **Kiểu mới (`packages/shared`):** `TaskRemoveResult {deleted: string[], kept: {id, reason}[]}`.
+- **Không xoá:** task `queued`, `running`, `waiting` (DELETE trả 400), và task thuộc một chuỗi kế hoạch chưa kết thúc (trạng thái khác `completed`, `cancelled`): planner, phản biện hay bước của chuỗi đó. Những task này nằm trong `kept` kèm lý do; DELETE một task như vậy trả 400.
+- **Giữ nguyên:** dữ liệu Monitor (event, session, invocation, tool call), tệp đính kèm trong `~/.ccgs-studio/attachments/`, file trong project.
+- **Chi phí và compact:** trước khi xoá, số tổng chi phí (`session_cost_usd`) và số token ngữ cảnh (`context_tokens`) mới nhất của session được lưu vào bảng `task_session_last`. Lần tiếp tục session đó sau này vẫn tính chi phí theo hiệu như cũ, và vẫn quyết định compact đúng.
+- **Live:** event `task:delete` `{ids: string[]}`.
+- Task đã xoá không tiếp tục được từ Task Center (không còn bản ghi); session vẫn tiếp tục được từ chuỗi kế hoạch.
+
+## 14. Nút xoá ở Session, Logs, Hiệu suất và 2 skill ở Bước 0 (2026-11-12)
+
+| Method | Path | Mô tả |
+|---|---|---|
+| DELETE | `/api/sessions/:id` | Xoá session cùng event, invocation, tool call và log của nó. 404 khi không có; 409 khi session chưa kết thúc (chưa có `SessionEnd`) hoặc thuộc task `queued`/`running`/`waiting`. Trả `{ok, events, logs}`. Task trong Task Center giữ nguyên |
+| DELETE | `/api/logs?level&source&q&session&from&to` | Xoá log khớp bộ lọc, cùng nghĩa với `GET /api/logs` (không có `before`, `limit`). Không lọc gì thì xoá hết. Trả `{deleted}` |
+| DELETE | `/api/stats` | Đặt mốc `meta.stats_since` = lúc gọi. `GET /api/stats/tasks` (task kết thúc từ mốc, theo `ended_at`, không có thì `created_at`) và `GET /api/stats/agents` (theo `started_at`, không có thì `ended_at`) chỉ tính từ mốc. Không xoá dữ liệu nào. Trả `{since}` |
+| POST | `/api/scan/skill/:name` | `name` chỉ nhận `start`, `project-stage-detect`, `adopt` (khác thì 400). Tạo task skill tiếp nối session quét (`resumeOf` = `GameScan.sessionId`). Thứ tự: `project-stage-detect` cần `/start` đã xong (`startDoneAt` hoặc `project.yaml` có `modes.rigor`); `adopt` cần `project-stage-detect` đã xong. 400 khi skill đó đang chạy. `POST /api/scan/start-skill` vẫn giữ, bằng `skill/start` |
+
+- **Kiểu (`packages/shared`):** `TaskStats.since?: string | null`; `GameScan.steps?: {project-stage-detect?, adopt?: {taskId, doneAt}}`; `SCAN_SKILLS`, `ScanSkill`, `ScanStepSkill`. Quét lại không xoá `steps`.
+- **Live:** event `monitor:cleared` `{what: 'session' | 'logs' | 'stats', id?}`.
+
+## 15. Đầu ra của task (2026-11-12)
+
+Tab **Đầu ra** trong Task Center: các file task đã tạo hoặc sửa (`changedFiles` trừ file bị xoá), kèm việc Studio làm được với từng loại. Không gọi Claude.
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | `/api/tasks/:id/outputs` | `TaskOutput[]`. Đường dẫn tính từ gốc git của project (như `changedFiles`). 400 khi chưa chọn project |
+| GET | `/api/tasks/:id/outputs/raw/<path>` | Nội dung một file đầu ra, `?download=1` để tải về. Chỉ đọc được file nằm trong `changedFiles` (không phải `D`), hoặc file nằm cùng thư mục (kể cả thư mục con) với một trang `.html` task đã đổi, để CSS, JS và ảnh của trang tải được. File phải nằm trong project, không theo symlink ra ngoài. Có header `Content-Security-Policy: sandbox …`, nên script của trang không gọi được `/api`. 400 khi vi phạm hoặc khi file không còn |
+| GET | `/api/tasks/:id/outputs/export?path=&format=xlsx\|csv` | Chuyển một file `.md` đầu ra (tối đa 5 MB). **xlsx**: sheet "Nội dung" chứa mọi mục theo heading, bảng nằm đúng chỗ dưới dạng ô thật; sau đó mỗi bảng thêm 1 sheet riêng, có bộ lọc. **csv**: chỉ lấy các bảng, có BOM UTF-8. Các bảng cùng cột thì gộp lại kèm cột "Mục"; khác cột thì xếp lần lượt, mỗi bảng có 1 dòng tiêu đề. File không có bảng thì trả 400 |
+
+- **Kiểu (`packages/shared`):** `TaskOutputKind = 'web' | 'doc' | 'image' | 'data' | 'other'` (`.html`, `.md`, ảnh, `csv`/`json`, còn lại); `TaskOutput { path, change, kind, exists, size, preview, tables }`. `preview` là URL `/preview/...` cho HTML nằm trong `prototypes/` của project; `tables` là số bảng của file `.md`.
+- File Excel hoặc CSV chỉ là bản xuất. File `.md` vẫn là bản gốc; sửa trong Excel thì `.md` không đổi theo.
+
+**Chọn đầu ra khi tạo task (2026-11-12, bổ sung §15):**
+- `NewTask.output?: 'web' | 'xlsx' | 'csv' | null` (`TaskOutputFormat`, `OUTPUT_FORMATS`). Giá trị khác thì 400. `Task.output` được lưu ở cột `tasks.output`. `POST /api/tasks/:id/resume` nhận thêm `output`.
+- Runner tạo thư mục `~/.ccgs-studio/outputs/<taskId>/`, thêm nó vào `additionalDirectories`, và gắn vào cuối prompt (sau ghi chú tệp đính kèm) một lời dặn bằng tiếng Anh tuỳ theo đầu ra:
+  - **web:** một file `index.html` tự chạy, CSS và JS viết trong file, không dùng `type="module"`, không gọi mạng;
+  - **xlsx:** `output.md` gồm tiêu đề, các mục và bảng pipe. Studio dựng `output.xlsx` cạnh file `.md` khi gọi `GET /outputs`, và dựng lại khi `.md` mới hơn;
+  - **csv:** mỗi bảng là một file `.csv`.
+- `GET /api/tasks/:id/outputs` liệt kê file trong thư mục này trước, với `path` bắt đầu bằng `~studio/`, rồi tới file của project. Route `raw/~studio/...` và `export?path=~studio/...` chỉ đọc file nằm trong thư mục đó.
+- Xoá task thì xoá luôn thư mục đầu ra của nó.
+
+## 16. Giải thích skill (2026-11-12)
+
+Trang Skills có 3 tab: **Giải thích** (mặc định), **Lịch sử chạy**, **SKILL.md**. Tab Giải thích có 2 phần:
+
+1. **Suy ra từ SKILL.md và workflow-catalog**, không gọi Claude, luôn có:
+   - vị trí của skill trong quy trình CCGS: bước đứng trước và bước đứng sau;
+   - các bước skill chạy, lấy từ heading `Phase`, `Step` hoặc `Bước` nằm ngoài khối code (nếu SKILL.md không có các heading đó thì lấy mọi heading `##`);
+   - các skill khác mà SKILL.md nhắc tới dạng `/tên`.
+2. **Giải thích tiếng Việt do Claude viết**, chỉ có khi người dùng bấm nút. Studio tạo một task (`model: sonnet`) và đưa thẳng nội dung SKILL.md vào prompt (tối đa 120.000 ký tự). Task không dùng tool, không sửa file, và trả về markdown ngắn theo các mục cố định: **Mục đích**, **Khi dùng**, **Cần có**, **Các bước**, **Kết quả**, **Lưu ý**, **Tiếp theo**. Mỗi dòng tối đa 15 từ, mỗi mục tối đa 3 dòng (Các bước tối đa 5). Server đọc các mục này. Bản cũ dạng khối ```json vẫn đọc được. Không bảo Claude tự Read file, vì plugin context-mode có thể cắt kết quả Read rồi Claude phải xin quyền `ctx_search`. Kết quả lưu theo hash nội dung SKILL.md. Khi SKILL.md đổi, bản cũ vẫn hiện nhưng có cờ `stale`.
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | `/api/skills/:name/guide` | `SkillGuide`. 404 khi không có skill, 503 khi chưa chọn project |
+| POST | `/api/skills/:name/guide` | Tạo task giải thích, trả `SkillGuide` (lúc này `taskId` có giá trị). Nếu đang có task giải thích cho đúng nội dung này thì trả lại nó, không tạo task mới. 400 khi skill không có SKILL.md |
+
+- **Kiểu (`packages/shared`):**
+  - `SkillFacts { workflow: { phase; step; required; prev; next }[]; phases: string[]; mentions: string[] }`;
+  - `SkillExplain { purpose; whenToUse[]; needs[]; steps[]; outputs[]; writes; limits[]; next[] }`, mọi trường đều là chuỗi hoặc mảng chuỗi;
+  - `SkillGuide { name; hash; facts; explain: SkillExplain | null; explainedAt; stale; taskId; taskStatus; error }`.
+- **Bảng `skill_guides`:** `hash` (sha256 của SKILL.md) là khoá chính, kèm `name, explain (JSON), task_id, error, created_at`. GET lấy dòng đúng hash; nếu không có thì lấy dòng mới nhất cùng tên và đặt `stale: true`.
+- **Khi task giải thích kết thúc:** nếu `completed` và đọc được JSON hợp lệ thì lưu `explain`. Nếu không, lưu `error`, để người dùng bấm lại. Task bị xoá khỏi lịch sử khi chưa xong thì bỏ trạng thái chờ.
+- Trên web, tab tự tải lại khi có `task:upsert` của task giải thích.

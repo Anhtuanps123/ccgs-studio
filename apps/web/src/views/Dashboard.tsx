@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { ConfigSummary, CurrentTask, GameScan, GraphStatus, PipelineSetup, SystemStatus, Task } from "@ccgs/shared";
+import type { ConfigSummary, CurrentTask, GameScan, GraphStatus, PipelineSetup, ScanStepSkill, SystemStatus, Task } from "@ccgs/shared";
 import { api, live, useApi } from "../api";
 import { Duration, Status, when } from '../monitor';
 import { useTaskData } from './Tasks';
@@ -31,6 +31,12 @@ function CurrentTaskCard() {
   );
 }
 
+/** Skills after /start for a game that already has code (/start SKILL.md, path D). Each continues the scan session. */
+const STEPS: [ScanStepSkill, string][] = [
+  ['project-stage-detect', 'Sau /start: project đang ở giai đoạn nào, còn thiếu gì.'],
+  ['adopt', 'Sau /project-stage-detect: file có sẵn có đúng định dạng skill đọc không. Hỏi trước khi ghi docs/adoption-plan-<ngày>.md.'],
+];
+
 /** Bước 0 trước /start và lập kế hoạch: đọc game qua Unity MCP (chỉ đọc). */
 function GameScanCard() {
   const scan = useApi<GameScan>('/api/scan');
@@ -57,10 +63,17 @@ function GameScanCard() {
           <div className="muted small">{g.error ?? (g.at ? `Lúc ${new Date(g.at).toLocaleString()}` : 'Unknown')}{g.status === 'running' ? '. Nếu Claude hỏi quyền dùng tool Unity, trả lời trong Task Center.' : ''}</div></div></li>
         <li><Mark ok={!!st?.started} /><div><b>/start {st?.started ? (st.source === 'session' ? `đã chạy trong phiên (không lưu project.yaml, rigor mặc định ${st.rigor})` : `đã chạy (rigor ${st.rigor}, stage ${st.stage ?? 'Unknown'})`) : 'chưa chạy'}</b>
           <div className="muted small">Chạy /start tiếp nối session quét để nó biết UI/UX đang có.</div></div></li>
+        {STEPS.map(([k, why]) => { const v = g.steps?.[k]; return (
+          <li key={k}><Mark ok={!!v?.doneAt} /><div><b>/{k} {v?.doneAt ? `đã chạy lúc ${new Date(v.doneAt).toLocaleString()}` : v ? 'đã gửi, chưa xong' : 'chưa chạy'}</b>
+            <div className="muted small">{why}</div></div></li>); })}
       </ul>
       <div className="row">
         <button className="btn primary" disabled={g.status === 'running'} onClick={() => post('/api/scan')}>{g.status === 'none' ? 'Quét game' : 'Quét lại'}</button>
         <button className="btn" disabled={g.status !== 'ok'} onClick={() => post('/api/scan/start-skill')}>Chạy /start với kết quả quét</button>
+        <button className="btn" disabled={g.status !== 'ok' || !(st?.started || g.startDoneAt)} title={st?.started || g.startDoneAt ? '' : 'Chạy /start trước'}
+          onClick={() => post('/api/scan/skill/project-stage-detect')}>Chạy /project-stage-detect</button>
+        <button className="btn" disabled={g.status !== 'ok' || !g.steps?.['project-stage-detect']?.doneAt} title={g.steps?.['project-stage-detect']?.doneAt ? '' : 'Chạy /project-stage-detect trước'}
+          onClick={() => post('/api/scan/skill/adopt')}>Chạy /adopt</button>
         <Link to="/pipelines" className="btn">Lập kế hoạch</Link>
       </div>
       {err && <div className="badge-err">{err}</div>}

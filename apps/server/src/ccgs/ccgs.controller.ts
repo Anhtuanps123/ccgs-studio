@@ -1,12 +1,13 @@
-import { Controller, Get, NotFoundException, Param, Query, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Controller, Get, NotFoundException, Param, Post, Query, ServiceUnavailableException } from '@nestjs/common';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AgentDefinition, Skill } from '@ccgs/shared';
+import type { AgentDefinition, Skill, SkillGuide } from '@ccgs/shared';
 import { CcgsAdapterService } from './adapter.service';
+import { BadGuide, SkillGuideService } from './skill-guide';
 
 @Controller('api')
 export class CcgsController {
-  constructor(private readonly adapter: CcgsAdapterService) {}
+  constructor(private readonly adapter: CcgsAdapterService, private readonly guides: SkillGuideService) {}
 
   private snap() {
     const s = this.adapter.snapshot;
@@ -30,6 +31,19 @@ export class CcgsController {
     const s = this.snap().skills.find(x => x.name === name);
     if (!s) throw new NotFoundException();
     return s;
+  }
+
+  /** Giải thích skill (api-contract §16). */
+  @Get('skills/:name/guide') guide(@Param('name') name: string): SkillGuide { return this.guideCall(() => this.guides.get(name)); }
+  @Post('skills/:name/guide') explain(@Param('name') name: string): SkillGuide { return this.guideCall(() => this.guides.explain(name)); }
+  private guideCall(f: () => SkillGuide | null): SkillGuide {
+    let g: SkillGuide | null;
+    try { g = f(); } catch (e) {
+      if (e instanceof BadGuide) throw e.message.startsWith('Không có skill') ? new NotFoundException(e.message) : new BadRequestException(e.message);
+      throw e;
+    }
+    if (!g) throw new ServiceUnavailableException('Chưa chọn project hợp lệ');
+    return g;
   }
 
   @Get('rules') rules() { return this.snap().rules; }

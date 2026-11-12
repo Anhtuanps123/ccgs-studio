@@ -12,11 +12,11 @@ import { GraphService, type Exec, type ExecResult } from '../src/graph/graph.ser
 import { mergeSettings, DEFAULT_SETTINGS, BadSettings } from '../src/settings/settings.service';
 import { openDb } from '../src/store/db';
 import { TaskQueue } from '../src/tasks/task-queue';
-import { ASK_STYLE_HINT, extrasOptions, type RunHooks, type RunOptions, type RunOutcome, type Runner, type SessionExtras } from '../src/tasks/runner';
+import { BASE_SYSTEM_PROMPT, extrasOptions, type RunHooks, type RunOptions, type RunOutcome, type Runner, type SessionExtras } from '../src/tasks/runner';
 import { CODE_TOOLS_HINT, PipelineService, plannerPrompt } from '../src/pipelines/pipeline.service';
 
 /** SDK options of a task without extras: only the Studio system prompt. */
-const ONLY_ASK = { systemPrompt: ASK_STYLE_HINT, appendSubagentSystemPrompt: ASK_STYLE_HINT };
+const ONLY_ASK = { systemPrompt: BASE_SYSTEM_PROMPT, appendSubagentSystemPrompt: BASE_SYSTEM_PROMPT };
 
 const tick = (ms = 10) => new Promise(r => setTimeout(r, ms));
 const ok = (stdout: string, code = 0): ExecResult => ({ code, stdout, stderr: '', timedOut: false, error: null });
@@ -74,7 +74,7 @@ describe('graph core', () => {
     expect(s.systemPrompt).toBe(CODE_TOOLS_HINT);
     expect(CODE_TOOLS_HINT).toMatch(/query the graph FIRST/);
     expect(CODE_TOOLS_HINT).toMatch(/do not have to query the graph when the task does not touch code/);
-    const both = `${ASK_STYLE_HINT}\n\n${CODE_TOOLS_HINT}`;
+    const both = `${BASE_SYSTEM_PROMPT}\n\n${CODE_TOOLS_HINT}`;
     expect(extrasOptions(s)).toEqual({ mcpServers: s.mcpServers, allowedTools: s.allowedTools, disallowedTools: s.disallowedTools,
       systemPrompt: both, appendSubagentSystemPrompt: both });
     expect(extrasOptions(null)).toEqual(ONLY_ASK);

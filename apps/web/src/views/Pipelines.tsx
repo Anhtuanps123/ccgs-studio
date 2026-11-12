@@ -1,7 +1,7 @@
 // Feature pipelines: one request -> plan -> approve -> chained tasks in one session.
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import type { CritiqueRound, PermissionMode, Pipeline, PipelineMode, PipelineSetup, PipelineStep, PlanIssue, PlanRoleInfo, Rigor, SessionUsage, Skill, StudioSettings } from '@ccgs/shared';
+import type { CritiqueRound, PermissionMode, Pipeline, PipelineMode, PipelineSetup, PipelineStep, PlanIssue, PlanRoleInfo, ProjectRuleState, Rigor, RuleCheck, SessionUsage, Skill, StudioSettings } from '@ccgs/shared';
 import { api, live, useApi } from '../api';
 import { Status, when } from '../monitor';
 import { fmtNum, fmtUsd, totalTok } from '../insights';
@@ -104,6 +104,7 @@ function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
         </div>)}
       {started && setup.data?.source === 'session' && <p className="small muted" style={{ marginTop: 0 }}>Đã chạy /start trong phiên nhưng không lưu project.yaml: rigor mặc định {setup.data?.rigor}, chọn lại bên dưới nếu cần.</p>}
       {started && setup.data?.source !== 'session' && <p className="small muted" style={{ marginTop: 0 }}>Đã chạy /start: stage {setup.data?.stage ?? 'Unknown'}, rigor {setup.data?.rigor}, tự động {setup.data?.automation ?? 'Unknown'}.</p>}
+      {started && <OpenItems />}
       <div className="field" {...att.zone}><label htmlFor="pl-req">Bạn muốn làm gì?</label>
         <textarea id="pl-req" value={request} onChange={e => setRequest(e.target.value)} placeholder="Ví dụ: Tôi muốn tạo chức năng Lucky Spin: 1 lượt quay miễn phí mỗi ngày, thêm lượt qua quảng cáo" style={{ minHeight: 90 }} />
         <AttachBar att={att} />
@@ -139,6 +140,41 @@ function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
       <p className="small muted" style={{ marginTop: 0 }}>Bước đầu Claude chỉ đọc project để lập kế hoạch, không sửa file. Bạn xem và sửa kế hoạch trước khi chạy.</p>
       <div className="row"><button className="btn primary" disabled={busy || att.busy || !request.trim() || !started || noRole} onClick={submit}>Lập kế hoạch</button>{err && <span className="badge-err">{err}</span>}</div>
     </div></div>
+  );
+}
+
+/** Rule 9: what is still pending in active.md, and rule 7: whether design/conventions.md exists, before planning. */
+function OpenItems() {
+  const st = useApi<ProjectRuleState>('/api/pipelines/project-state');
+  const s = st.data;
+  if (!s || (!s.openItems.length && s.conventions.exists)) return null;
+  return (
+    <details className="field" style={{ border: '1px solid var(--line)', borderRadius: 6, padding: 8 }}>
+      <summary className="small"><b>Trước khi lập kế hoạch</b>{s.openItems.length ? ` · ${s.openItems.length} mục đang treo trong active.md` : ''}{!s.conventions.exists ? ' · chưa có design/conventions.md' : ''}</summary>
+      {s.openItems.length > 0 && <ul className="small" style={{ margin: '6px 0 0', paddingLeft: 20, maxHeight: 240, overflowY: 'auto' }}>{s.openItems.map((i, k) => <li key={k}>{i.text}</li>)}</ul>}
+      <div className="small muted" style={{ marginTop: 4 }}>
+        {s.openItems.length > 0 && 'Claude lập kế hoạch sẽ được xem các mục này (quy tắc 9). Mục nào liên quan yêu cầu thì nên chốt trước. '}
+        {!s.conventions.exists && 'Kế hoạch có UI sẽ tự thêm bước ghi quy ước UI (quy tắc 7). '}
+        <Link to="/rules">Xem quy tắc</Link></div>
+    </details>
+  );
+}
+
+const RULE_MARK: Record<RuleCheck['state'], [string, string, string]> = {
+  ok: ['✓', 'ok', 'Đạt'], warn: ['!', 'warn', 'Cần xem'], todo: ['…', 'pend', 'Studio sẽ kiểm khi chạy'], na: ['–', 'pend', 'Không áp dụng'],
+};
+/** The 9 studio rules for this plan (display only, never blocks). */
+function RuleList({ p }: { p: Pipeline }) {
+  const rules = p.rules ?? [];
+  if (!rules.length) return null;
+  const warns = rules.filter(r => r.state === 'warn').length;
+  return (
+    <details open={warns > 0}><summary className="small"><b>Quy tắc CCGS</b> · {warns ? `${warns} quy tắc cần xem` : 'không có gì cần xem'} · <Link to="/rules">chi tiết</Link></summary>
+      <ul className="checks">{rules.map(r => (
+        <li key={r.rule}><span className={`mark ${RULE_MARK[r.state][1]}`} title={RULE_MARK[r.state][2]}>{RULE_MARK[r.state][0]}</span>
+          <div className="small"><b>{r.rule}. {r.title}</b> <span className={r.state === 'warn' ? '' : 'muted'}>{r.detail}</span></div></li>
+      ))}</ul>
+    </details>
   );
 }
 
@@ -245,6 +281,7 @@ function Detail({ p, onDeleted }: { p: Pipeline; onDeleted: () => void }) {
           {p.error && <div className="badge-err">{p.error}</div>}
           {err && <div className="badge-err">{err}</div>}
           <PlanCheck p={p} />
+          <RuleList p={p} />
           <Critique p={p} />
           {canRevise && <details open={opinions > 0}><summary className="small">Sửa theo phản biện{opinions ? ` (${opinions} ý kiến)` : ''}</summary>
             <div className="row" style={{ marginTop: 6 }}><input type="text" value={fixNote} onChange={e => setFixNote(e.target.value)} placeholder='Quyết định của bạn, vd: "Rigor giữ minimal. Nút dùng chữ Claim."' aria-label="Ghi chú sửa theo phản biện" style={{ flex: 1, minWidth: 160 }} />
@@ -259,6 +296,14 @@ function Detail({ p, onDeleted }: { p: Pipeline; onDeleted: () => void }) {
               <div className="row"><input type="text" value={answer} onChange={e => setAnswer(e.target.value)} placeholder="Câu trả lời của bạn" aria-label="Trả lời Claude" style={{ flex: 1, minWidth: 160 }} />
                 <button className="btn sm primary" disabled={busy || !answer.trim()} onClick={async () => { await call('/answer', { text: answer }); setAnswer(''); }}>Trả lời và chạy tiếp</button></div></>}
             {p.checkpoint.replan && <div className="small muted">Kết quả lệch kế hoạch: nên lập lại kế hoạch cho các bước còn lại.</div>}
+            {(() => {
+              const g = p.steps.find(s => s.id === p.checkpoint!.stepId)?.gate;
+              return g && !g.acknowledged ? <div className="small">
+                <div>Câu hỏi chưa chốt (quy tắc 3):</div>
+                <ul style={{ margin: '2px 0', paddingLeft: 20 }}>{g.items.map((q, k) => <li key={k}>{q}</li>)}</ul>
+                <div className="muted">Chốt rồi sửa {g.files.map(f => <code key={f} style={{ marginRight: 4 }}>{f}</code>)}, hoặc bấm Tiếp tục để code theo hiện trạng.</div>
+              </div> : null;
+            })()}
           </div>}
           {stopped && ran && <details open={!!p.checkpoint?.replan}><summary className="small">Lập lại kế hoạch cho các bước còn lại</summary>
             <div className="row" style={{ marginTop: 6 }}><input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Ghi chú cho Claude (không bắt buộc)" aria-label="Ghi chú lập lại kế hoạch" style={{ flex: 1, minWidth: 160 }} />
@@ -347,7 +392,7 @@ function PlanCheck({ p }: { p: Pipeline }) {
         {!issues.length && <span className="muted">Đạt chuẩn mẫu.</span>}
       </div>
       {issues.length > 0 && <ul className="checks">{issues.map((i, k) => (
-        <li key={k}><span className={`mark ${i.level === 'error' ? 'bad' : i.level === 'info' ? 'ok' : ''}`} title={ISSUE[i.level][1]}>{ISSUE[i.level][0]}</span>
+        <li key={k}><span className={`mark ${i.level === 'error' ? 'bad' : i.level === 'info' ? 'ok' : 'warn'}`} title={ISSUE[i.level][1]}>{ISSUE[i.level][0]}</span>
           <div className={i.level === 'error' ? 'badge-err' : 'small'}>{i.message}{i.stepId && titleOf(i.stepId) ? <span className="muted"> · bước "{titleOf(i.stepId)}"</span> : null}</div></li>
       ))}</ul>}
       {!!p.omitted?.length && <div className="small muted">Bước mẫu planner bỏ: {p.omitted.map(o => `/${o.skill} (${o.why})`).join('; ')}</div>}
@@ -374,7 +419,7 @@ function Critique({ p }: { p: Pipeline }) {
         <details key={k} open={k === last && c.issues.length > 0}>
           <summary className="small">Vòng {c.round}: {head(c)}</summary>
           {c.issues.length > 0 && <ul className="checks">{c.issues.map((i, n) => (
-            <li key={n}><span className={`mark ${i.level === 'error' ? 'bad' : ''}`} title={i.level === 'error' ? 'Lỗi' : 'Cảnh báo'}>{i.level === 'error' ? '✕' : '!'}</span>
+            <li key={n}><span className={`mark ${i.level === 'error' ? 'bad' : 'warn'}`} title={i.level === 'error' ? 'Lỗi' : 'Cảnh báo'}>{i.level === 'error' ? '✕' : '!'}</span>
               <div className="small">{i.message}{i.stepTitle ? <span className="muted"> · bước "{i.stepTitle}"</span> : null}</div></li>
           ))}</ul>}
         </details>

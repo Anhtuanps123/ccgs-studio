@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, HttpCode, NotFoundException, Param, Post, Query, UnauthorizedException } from '@nestjs/common';
+import { Body, ConflictException, Controller, Delete, Get, Headers, HttpCode, NotFoundException, Param, Post, Query, UnauthorizedException } from '@nestjs/common';
 import crypto from 'node:crypto';
 import type { IngestBody } from '@ccgs/shared';
 import { MonitorService } from './monitor.service';
@@ -50,6 +50,25 @@ export class MonitorController {
   }
   @Get('sessions/:id/timeline') timeline(@Param('id') id: string) { this.session(id); return this.monitor.timeline(id); }
   @Get('sessions/:id/events') events(@Param('id') id: string) { this.session(id); return this.monitor.events(id); }
+
+  /** "Xoá session": 409 while it (or its task) is running. */
+  @Delete('sessions/:id') remove(@Param('id') id: string) {
+    const r = this.monitor.deleteSession(id);
+    if (!r) throw new NotFoundException('Không có session này');
+    if ('busy' in r) throw new ConflictException(r.busy);
+    return { ok: true, ...r };
+  }
+
+  /** "Xoá log": same filter as GET /api/logs; no filter deletes every log. */
+  @Delete('logs') removeLogs(@Query() q: Record<string, string>) {
+    return { deleted: this.monitor.deleteLogs({
+      session: q.session || undefined, level: q.level || undefined, source: q.source || undefined, q: q.q || undefined,
+      from: q.from || undefined, to: q.to || undefined,
+    }) };
+  }
+
+  /** Hiệu suất "Xoá số liệu": stats count from now on; tasks and sessions are kept. */
+  @Delete('stats') resetStats() { return { since: this.monitor.resetStats() }; }
 
   @Get('logs') logs(@Query() q: Record<string, string>) {
     return this.monitor.logs({

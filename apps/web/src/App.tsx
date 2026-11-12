@@ -10,6 +10,7 @@ import { Project } from './views/Project';
 import { Preferences } from './views/Preferences';
 import { Performance } from './views/Performance';
 import { Pipelines } from './views/Pipelines';
+import { Rules } from './views/Rules';
 import { Tasks } from './views/Tasks';
 import { Setup } from './views/Setup';
 import { AgentMonitor, LiveSession, Logs, Timeline, ToolActivity } from './views/Monitor';
@@ -88,6 +89,7 @@ export function App() {
           <Item to="/projects" label="Project" alert={al["projects"]} />
           <Item to="/pipelines" label="Lập kế hoạch" alert={al["pipelines"]} />
           <Item to="/tasks" label="Task Center" alert={al["tasks"]} />
+          <Item to="/rules" label="Quy tắc" />
         </nav>
         <nav className="nav-group" aria-label="Monitor">
           <h2>Monitor</h2>
@@ -130,6 +132,7 @@ export function App() {
               <Route path="/tasks" element={<Tasks />} />
               <Route path="/setup" element={<Setup />} />
               <Route path="/pipelines" element={<Pipelines />} />
+              <Route path="/rules" element={<Rules />} />
               <Route path="/live" element={<LiveSession />} />
               <Route path="/agent-monitor" element={<AgentMonitor />} />
               <Route path="/timeline" element={<Timeline />} />

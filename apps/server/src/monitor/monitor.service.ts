@@ -17,6 +17,7 @@ import { redact, redactString } from './redact';
 
 export type MonitorEvents = {
   session: [Session]; invocation: [AgentInvocation]; toolcall: [ToolCall]; event: [StudioEvent]; log: [LogEntry]; doctor: [string];
+  cleared: [{ what: 'session' | 'logs' | 'stats'; id?: string }];
 };
 
 @Injectable()
@@ -263,18 +264,66 @@ export class MonitorService implements OnModuleDestroy {
     const rows = this.db.$client.prepare(`SELECT agent_type a, COUNT(*) n,
         SUM(status = 'completed') ok, SUM(status = 'failed') bad, SUM(status = 'unknown') unk,
         AVG(CASE WHEN status = 'completed' THEN duration_ms END) avg, MAX(COALESCE(started_at, ended_at)) last
-      FROM invocations WHERE agent_type <> 'main' GROUP BY agent_type ORDER BY n DESC`).all() as any[];
+      FROM invocations WHERE agent_type <> 'main' AND COALESCE(started_at, ended_at, '') >= ? GROUP BY agent_type ORDER BY n DESC`).all(this.statsSince() ?? '') as any[];
     return rows.map(r => ({ agentType: r.a, calls: r.n, completed: r.ok ?? 0, failed: r.bad ?? 0, unknown: r.unk ?? 0, avgDurationMs: r.avg === null ? null : Math.round(r.avg), lastAt: r.last }));
   }
 
   /** M-PF-01 */
   taskStats(): TaskStats {
+    const since = this.statsSince();
     const r = this.db.$client.prepare(`SELECT COUNT(*) n, SUM(status = 'completed') ok, SUM(status = 'failed') bad, SUM(status = 'cancelled') can,
         AVG(CASE WHEN status = 'completed' AND started_at IS NOT NULL AND ended_at IS NOT NULL
           THEN (julianday(ended_at) - julianday(started_at)) * 86400000 END) avg,
         SUM(cost_usd) + COALESCE(SUM(compact_cost_usd), 0) cost, COUNT(cost_usd) costN
-      FROM tasks WHERE status IN ('completed','failed','cancelled')`).get() as any;
-    return { total: r.n, completed: r.ok ?? 0, failed: r.bad ?? 0, cancelled: r.can ?? 0, avgDurationMs: r.avg === null ? null : Math.round(r.avg), totalCostUsd: r.costN ? r.cost : null };
+      FROM tasks WHERE status IN ('completed','failed','cancelled') AND COALESCE(ended_at, created_at) >= ?`).get(since ?? '') as any;
+    return { since, total: r.n, completed: r.ok ?? 0, failed: r.bad ?? 0, cancelled: r.can ?? 0, avgDurationMs: r.avg === null ? null : Math.round(r.avg), totalCostUsd: r.costN ? r.cost : null };
+  }
+
+  /**
+   * "Xoá session" button: the session with its events, invocations, tool calls and logs. Tasks stay in Task Center.
+   * Refuses (busy) a session still running or one a running task uses; null when there is no such session.
+   */
+  deleteSession(id: string): { busy: string } | { events: number; logs: number } | null {
+    const s = this.getSession(id);
+    if (!s) return null;
+    const c = this.db.$client;
+    const task = c.prepare("SELECT id FROM tasks WHERE session_id = ? AND status IN ('queued','running','waiting')").get(id) as any;
+    if (task) return { busy: 'Session thuộc task đang chạy. Dừng task trước rồi xoá.' };
+    if (!s.endedAt) return { busy: 'Session còn đang chạy (chưa có SessionEnd). Đợi kết thúc rồi xoá.' };
+    const r = c.transaction(() => {
+      const events = c.prepare('DELETE FROM events WHERE session_id = ?').run(id).changes;
+      c.prepare('DELETE FROM invocations WHERE session_id = ?').run(id);
+      c.prepare('DELETE FROM toolcalls WHERE session_id = ?').run(id);
+      const lg = c.prepare('DELETE FROM logs WHERE session_id = ?').run(id).changes;
+      c.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+      return { events, logs: lg };
+    })();
+    this.bus.emit('cleared', { what: 'session', id });
+    return r;
+  }
+
+  /** "Xoá log" button: the logs matching the same filter as GET /api/logs (no filter = all). Returns how many. */
+  deleteLogs(f: { session?: string; level?: string; source?: string; q?: string; from?: string; to?: string }): number {
+    const conds = [];
+    if (f.session) conds.push(eq(logs.sessionId, f.session));
+    if (f.from) conds.push(sql`${logs.timestamp} >= ${f.from}`);
+    if (f.to) conds.push(sql`${logs.timestamp} <= ${f.to}`);
+    if (f.level) conds.push(eq(logs.level, f.level));
+    if (f.source) conds.push(eq(logs.source, f.source));
+    if (f.q) conds.push(sql`instr(lower(${logs.message}), ${f.q.toLowerCase()}) > 0`);
+    const n = this.db.delete(logs).where(conds.length ? and(...conds) : undefined).run().changes;
+    this.bus.emit('cleared', { what: 'logs' });
+    return n;
+  }
+
+  /** Hiệu suất "Xoá số liệu": task and agent stats count only from this moment. Nothing is deleted. */
+  statsSince(): string | null {
+    return (this.db.$client.prepare("SELECT value FROM meta WHERE key = 'stats_since'").get() as any)?.value ?? null;
+  }
+  resetStats(now = new Date().toISOString()): string {
+    this.db.$client.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES ('stats_since', ?)").run(now);
+    this.bus.emit('cleared', { what: 'stats' });
+    return now;
   }
 
   /** S-04: drops sessions (and their events, invocations, tool calls, logs) idle for more than `days`. */
